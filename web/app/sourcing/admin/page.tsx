@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Flame,
   PauseCircle,
+  RefreshCw,
   LoaderCircle,
   PlugZap,
   Search,
@@ -81,6 +82,7 @@ type TrendBoardResponse = ApiError | { ok: true; board: TrendAdminBoard };
 type TrendCategoryResponse = ApiError | { ok: true; nodes: TrendCategoryNode[] };
 type TrendCollectResponse = ApiError | { ok: true; run: TrendRunDetail; reusedCachedResult?: boolean };
 type TrendRunActionResponse = ApiError | { ok: true; run?: TrendRunDetail; deletedRunId?: string };
+type TrendRunRetryResponse = ApiError | { ok: true; run: TrendRunDetail };
 type TrendRunResponse = ApiError | { ok: true; run: TrendRunDetail };
 type TrendSnapshotPageResponse =
   | ApiError
@@ -155,6 +157,7 @@ export default function SourcingAdminPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [retrySubmitting, setRetrySubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<BuilderFeedback | null>(null);
   const [snapshotPanel, setSnapshotPanel] = useState<SnapshotPanelState | null>(null);
@@ -196,6 +199,10 @@ export default function SourcingAdminPage() {
       : "첫 데이터를 기다리는 중입니다.";
 
   useEffect(() => {
+    if (ENV_API_BASE_URL) {
+      return;
+    }
+
     const storedUrl = normalizeApiBaseUrl(window.localStorage.getItem(API_BASE_STORAGE_KEY) ?? "");
 
     if (!storedUrl) {
@@ -538,6 +545,52 @@ export default function SourcingAdminPage() {
     if (apiBaseUrl) {
       void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
     }
+  }
+
+  async function handleRetryFailures(run: TrendRunDetail) {
+    if (!apiBaseUrl) {
+      setActiveSetupPanel("settings");
+      setError("실패 월을 재시도하려면 API 주소가 필요합니다.");
+      return;
+    }
+
+    setRetrySubmitting(true);
+    setError(null);
+    setFeedback({
+      tone: "info",
+      text: "실패한 월을 다시 대기열에 넣고 천천히 재수집합니다."
+    });
+
+    const response = await api<TrendRunRetryResponse>(apiBaseUrl, `/trends/runs/${run.id}/retry-failures`, {
+      method: "POST"
+    });
+
+    setRetrySubmitting(false);
+
+    if (!response.ok) {
+      setError(response.message ?? "실패 월 재시도 요청을 처리하지 못했습니다.");
+      setFeedback({
+        tone: "error",
+        text: response.message ?? "실패 월 재시도 요청을 처리하지 못했습니다."
+      });
+      return;
+    }
+
+    setCurrentRun(response.run);
+    setTrendBoard((previous) =>
+      previous
+        ? {
+            ...previous,
+            generatedAt: new Date().toISOString(),
+            runs: [response.run, ...previous.runs.filter((item) => item.id !== response.run.id)].slice(0, 8)
+          }
+        : previous
+    );
+    setFeedback({
+      tone: "success",
+      text: "실패한 월을 재시도합니다. 네이버 차단을 피하려고 이전보다 천천히 진행됩니다."
+    });
+    void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
   }
 
   async function handleSelectArchivedRun(run: TrendRunDetail) {
@@ -1063,7 +1116,7 @@ export default function SourcingAdminPage() {
                 <p className={styles.surfaceEyebrow}>RESULT</p>
                 <h2 className={styles.surfaceTitle}>데이터 취합</h2>
                 <p className={styles.surfaceDescription}>
-                  데이터 취합 진행 상황을 확인하고, 전체 5년 데이터가 모두 모이면 장기 세일즈 인사이트를 열어봅니다.
+                  데이터 취합 진행 상황을 확인하고, 네이버에서 받을 수 있는 월 데이터가 정리되면 장기 세일즈 인사이트를 열어봅니다.
                 </p>
               </div>
               <div className={styles.outputMeta}>
@@ -1087,6 +1140,17 @@ export default function SourcingAdminPage() {
                       <Trash2 size={14} />
                       삭제
                     </button>
+                    {visibleRun.status === "failed" ? (
+                      <button
+                        type="button"
+                        className={`${styles.secondaryButton} ${styles.warningButton}`}
+                        onClick={() => void handleRetryFailures(visibleRun)}
+                        disabled={retrySubmitting}
+                      >
+                        {retrySubmitting ? <LoaderCircle className={styles.spinningIcon} size={14} /> : <RefreshCw size={14} />}
+                        실패 재시도
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className={styles.outputStatus} aria-live="polite">
@@ -1131,7 +1195,7 @@ export default function SourcingAdminPage() {
                         ? isRunActive
                           ? "수집 중에는 월 진행 상태만 보여주고, 전체 월이 모두 끝난 뒤 장기 인사이트를 한 번에 생성합니다."
                           : visibleRun.analysisReady
-                            ? "전체 데이터 취합이 끝나 장기 세일즈 트렌드 분석을 보여주고 있습니다."
+                            ? "데이터 취합이 끝나 장기 세일즈 트렌드 분석을 보여주고 있습니다."
                             : "취합이 멈추었거나 완료되지 않아 장기 인사이트 생성은 잠시 보류된 상태입니다."
                         : "현재는 조건 입력 전입니다. 카테고리와 필터를 정한 뒤 분석을 시작해 주세요."}
                     </p>
@@ -1174,7 +1238,7 @@ export default function SourcingAdminPage() {
                   />
                   <ProgressStat
                     label="남은 예상시간"
-                    value={visibleRun ? etaLabel(visibleRun.etaMinutes) : `${estimatedLeadMinutes}분`}
+                    value={visibleRun ? runEtaLabel(visibleRun) : `${estimatedLeadMinutes}분`}
                     hint={visibleRun?.averageTaskSeconds ? `평균 ${visibleRun.averageTaskSeconds}초/월` : "초기 추정치"}
                   />
                   <ProgressStat
@@ -1185,7 +1249,7 @@ export default function SourcingAdminPage() {
                   <ProgressStat
                     label="최근 완료 월"
                     value={visibleRun?.latestCompletedPeriod ?? "대기"}
-                    hint={visibleRun?.analysisReady ? "전체 취합 완료" : "월별 완료 기준"}
+                    hint={visibleRun?.analysisReady ? "취합 완료" : "월별 완료 기준"}
                   />
                   <ProgressStat
                     label="처리 방식"
@@ -2348,6 +2412,22 @@ function etaLabel(minutes?: number) {
   const hours = Math.floor(minutes / 60);
   const remain = minutes % 60;
   return remain ? `${hours}시간 ${remain}분` : `${hours}시간`;
+}
+
+function runEtaLabel(run: TrendRunDetail) {
+  if (run.status === "completed") {
+    return "완료";
+  }
+
+  if (run.status === "failed") {
+    return "실패 중지";
+  }
+
+  if (run.status === "cancelled") {
+    return "중지됨";
+  }
+
+  return etaLabel(run.etaMinutes);
 }
 
 function formatDateTime(value?: string) {

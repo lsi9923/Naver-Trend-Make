@@ -1,6 +1,8 @@
 node_modules
 .pnpm-store
 .skill-build
+__pycache__/
+*.pyc
 .next
 .next-prod
 .next_corrupt_*
@@ -8,6 +10,10 @@ node_modules
 .next_prevercel_backup_*
 dist
 output
+build_*/
+*.log
+.wrangler/
+edge-api/.wrangler/
 .env
 .env.*
 .local

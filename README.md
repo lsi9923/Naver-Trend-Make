@@ -9,6 +9,22 @@
 - `web`: `/sourcing/admin` 화면과 루트 리다이렉트
 - `edge-api`: Cloudflare Worker 기반 수집/분석 API
 - `shared`: 웹과 Worker가 함께 쓰는 타입/상수
+- `desktop-artifacts`: 바탕화면에 만들어 둔 Windows 실행 파일과 연결 실행 파일
+
+## 바탕화면 실행 파일
+
+현재 GitHub 백업에는 바탕화면에서 쓰던 실행 파일도 같이 포함되어 있습니다.
+
+- `desktop-artifacts/Naver Trend Maker 10 로컬버전.exe`
+- `desktop-artifacts/Naver Trend Maker 10 Cloudflare 연결.exe`
+- `desktop-artifacts/Naver Trend Maker 10 Cloudflare 연결.cmd`
+
+실행 파일을 다시 만들 때는 PowerShell에서 이 저장소 폴더로 이동한 뒤 아래 스크립트를 실행합니다.
+
+```powershell
+.\build_local_app_exe.ps1
+.\build_cloudflare_setup_exe.ps1
+```
 
 ## 왜 개인 Worker가 필요한가요?
 
@@ -17,9 +33,9 @@
 ## 로컬 실행
 
 ```bash
-pnpm install
-pnpm --filter @runacademy/shared build
-pnpm --filter @runacademy/web dev
+corepack pnpm install
+corepack pnpm --filter @runacademy/shared build
+corepack pnpm --filter @runacademy/web dev
 ```
 
 관리자 화면:
@@ -33,14 +49,14 @@ http://localhost:3000/sourcing/admin
 ### 1. Cloudflare 로그인
 
 ```bash
-pnpm install
-pnpm wrangler login
+corepack pnpm install
+corepack pnpm wrangler login
 ```
 
 ### 2. D1 데이터베이스 생성
 
 ```bash
-pnpm wrangler d1 create naver-trend-maker-db
+corepack pnpm wrangler d1 create naver-trend-maker-db
 ```
 
 명령 결과에 표시되는 `database_id`를 `edge-api/wrangler.jsonc`의 `REPLACE_WITH_YOUR_D1_DATABASE_ID` 자리에 넣습니다.
@@ -48,13 +64,13 @@ pnpm wrangler d1 create naver-trend-maker-db
 ### 3. D1 스키마 적용
 
 ```bash
-pnpm wrangler d1 execute naver-trend-maker-db --remote --file edge-api/schema.sql
+corepack pnpm wrangler d1 execute naver-trend-maker-db --remote --file edge-api/schema.sql
 ```
 
 ### 4. Worker 배포
 
 ```bash
-pnpm wrangler deploy --config edge-api/wrangler.jsonc
+corepack pnpm wrangler deploy --config edge-api/wrangler.jsonc
 ```
 
 배포 후 표시되는 Worker URL 뒤에 `/v1`을 붙여 API 주소로 사용합니다.

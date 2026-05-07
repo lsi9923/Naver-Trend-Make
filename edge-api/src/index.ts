@@ -78,8 +78,14 @@ const JSON_HEADERS = {
   "access-control-allow-headers": "content-type"
 };
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
-const PROCESS_BATCH_MAX_TASKS = 8;
+const PROCESS_BATCH_MAX_TASKS = 1;
 const PROCESS_BATCH_MAX_WALL_MS = 25_000;
+const NAVER_REQUEST_MAX_ATTEMPTS = 5;
+const NAVER_PAGE_DELAY_MIN_MS = 1_700;
+const NAVER_PAGE_DELAY_MAX_MS = 3_200;
+const NAVER_RATE_LIMIT_BASE_DELAY_MS = 8_000;
+const NAVER_TRANSIENT_BASE_DELAY_MS = 2_000;
+const STALE_RUNNING_TASK_MS = 90_000;
 let schemaReadyPromise: Promise<void> | null = null;
 
 type NaverSessionRef = {
@@ -350,11 +356,15 @@ async function buildRunBoardDetail(db: D1Database, run: TrendCollectionRun): Pro
   const completedDurations = tasks
     .filter((task) => task.status === "completed" && task.startedAt && task.completedAt)
     .map((task) => Math.max(1, (new Date(task.completedAt!).getTime() - new Date(task.startedAt!).getTime()) / 1000));
-  const averageTaskSeconds = completedDurations.length
+  const measuredAverageTaskSeconds = completedDurations.length
     ? Math.round(completedDurations.reduce((sum, value) => sum + value, 0) / completedDurations.length)
     : 8;
+  const minimumNaverTaskSeconds = profile.resultCount === 40 ? 5 : 3;
+  const averageTaskSeconds =
+    processingMode === "naver" ? Math.max(minimumNaverTaskSeconds, measuredAverageTaskSeconds) : measuredAverageTaskSeconds;
   const remainingTasks = Math.max(0, run.totalTasks - run.completedTasks);
-  const etaMinutes = run.status === "completed" || remainingTasks === 0 ? 0 : Math.max(1, Math.ceil((remainingTasks * averageTaskSeconds) / 60));
+  const isActiveRun = run.status === "queued" || run.status === "running";
+  const etaMinutes = !isActiveRun || remainingTasks === 0 ? 0 : Math.max(1, Math.ceil((remainingTasks * averageTaskSeconds) / 60));
   const estimatedCompletionAt =
     etaMinutes > 0 ? new Date(Date.now() + etaMinutes * 60_000).toISOString() : run.completedAt;
   const currentPage = runningTask
@@ -365,6 +375,10 @@ async function buildRunBoardDetail(db: D1Database, run: TrendCollectionRun): Pro
     : undefined;
   const expectedPeriods = listMonthlyPeriods(profile.startPeriod, profile.endPeriod);
   const completedPeriodCount = new Set(tasks.filter((task) => task.status === "completed").map((task) => task.period)).size;
+  const profileSnapshotCount = await scalar<number>(db, "SELECT COUNT(*) FROM trend_snapshots WHERE profile_id = ? AND rank <= ?", [
+    profile.id,
+    profile.resultCount
+  ]);
 
   return {
     ...run,
@@ -383,7 +397,7 @@ async function buildRunBoardDetail(db: D1Database, run: TrendCollectionRun): Pro
     estimatedCompletionAt,
     canCancel: run.status === "queued" || run.status === "running",
     canDelete: true,
-    analysisReady: run.status === "completed" && completedPeriodCount >= expectedPeriods.length,
+    analysisReady: run.status === "completed" && completedPeriodCount >= expectedPeriods.length && Number(profileSnapshotCount ?? 0) > 0,
     analysisCards: []
   };
 }
@@ -592,14 +606,14 @@ async function startTrendCollection(db: D1Database, input: TrendProfileInput) {
 async function findReusableCompletedRun(db: D1Database, profile: TrendProfile): Promise<TrendCollectionRun | null> {
   const latestCollectiblePeriod = getLatestCollectibleTrendPeriod();
   const periods = listMonthlyPeriods(profile.startPeriod, latestCollectiblePeriod);
-  const completedRows = await all<{ period: string; count: number }>(
+  const completedTaskRows = await all<{ period: string }>(
     db,
-    "SELECT period, COUNT(*) as count FROM trend_snapshots WHERE profile_id = ? AND rank <= ? GROUP BY period",
-    [profile.id, profile.resultCount]
+    "SELECT DISTINCT period FROM trend_tasks WHERE profile_id = ? AND status = 'completed'",
+    [profile.id]
   );
-  const completedMap = new Map(completedRows.map((row) => [row.period, Number(row.count) >= profile.resultCount]));
+  const completedTaskPeriods = new Set(completedTaskRows.map((row) => row.period));
 
-  if (!periods.length || periods.some((period) => !completedMap.get(period))) {
+  if (!periods.length || periods.some((period) => !completedTaskPeriods.has(period))) {
     return null;
   }
 
@@ -647,6 +661,11 @@ async function findReusableCompletedRun(db: D1Database, profile: TrendProfile): 
     await batchInChunks(db, inserts, 50);
   }
 
+  const totalSnapshots = await scalar<number>(db, "SELECT COUNT(*) FROM trend_snapshots WHERE profile_id = ? AND rank <= ?", [
+    profile.id,
+    profile.resultCount
+  ]);
+
   await run(
     db,
     `UPDATE trend_runs
@@ -666,7 +685,7 @@ async function findReusableCompletedRun(db: D1Database, profile: TrendProfile): 
       latestCollectiblePeriod,
       periods.length,
       periods.length,
-      periods.length * profile.resultCount,
+      Number(totalSnapshots ?? 0),
       now,
       reusableRunRow.id
     ]
@@ -986,19 +1005,27 @@ async function startBackfill(db: D1Database, profileId: string) {
   }
 
   const periods = listMonthlyPeriods(profile.startPeriod, latestCollectiblePeriod);
-  const completedRows = await all<{ period: string; count: number }>(
+  const snapshotCompletedRows = await all<{ period: string; count: number }>(
     db,
     "SELECT period, COUNT(*) as count FROM trend_snapshots WHERE profile_id = ? AND rank <= ? GROUP BY period",
     [profileId, profile.resultCount]
   );
-  const completedMap = new Map(completedRows.map((row) => [row.period, Number(row.count) >= profile.resultCount]));
+  const snapshotCompletedMap = new Map(snapshotCompletedRows.map((row) => [row.period, Number(row.count) >= profile.resultCount]));
+  const completedTaskRows = await all<{ period: string }>(
+    db,
+    "SELECT DISTINCT period FROM trend_tasks WHERE profile_id = ? AND status = 'completed'",
+    [profileId]
+  );
+  const completedTaskPeriods = new Set(completedTaskRows.map((row) => row.period));
   const pendingRows = await all<{ period: string }>(
     db,
     "SELECT DISTINCT period FROM trend_tasks WHERE profile_id = ? AND status IN ('pending', 'running')",
     [profileId]
   );
   const pendingPeriods = new Set(pendingRows.map((row) => row.period));
-  const targetPeriods = periods.filter((period) => !completedMap.get(period) && !pendingPeriods.has(period));
+  const targetPeriods = periods.filter(
+    (period) => !snapshotCompletedMap.get(period) && !completedTaskPeriods.has(period) && !pendingPeriods.has(period)
+  );
   const cachedPlans: Array<{ period: string; taskId: string; ranks: NaverKeywordRankItem[] }> = [];
   const uncachedPeriods: string[] = [];
 
@@ -1194,6 +1221,19 @@ async function processQueuedRunBatch(
   const startedAt = Date.now();
   const sessionRef: NaverSessionRef = {};
   const results: Json[] = [];
+  const db = dbFor(env);
+  await recoverStaleRunningTasks(db, options.runId);
+
+  if (await hasActiveRunningTask(db, options.runId)) {
+    return {
+      ok: true as const,
+      processed: false,
+      processedTasks: 0,
+      durationMs: Date.now() - startedAt,
+      reason: "RUNNING_TASK_ACTIVE",
+      results
+    };
+  }
 
   for (let index = 0; index < maxTasks; index += 1) {
     if (Date.now() - startedAt >= maxWallMs) {
@@ -1228,6 +1268,12 @@ async function processQueuedRunBatch(
 }
 
 async function shouldKickQueuedProcessing(db: D1Database, runId?: string) {
+  await recoverStaleRunningTasks(db, runId);
+
+  if (await hasActiveRunningTask(db, runId)) {
+    return false;
+  }
+
   const processableRuns = await scalar<number>(
     db,
     runId
@@ -1248,6 +1294,64 @@ async function shouldKickQueuedProcessing(db: D1Database, runId?: string) {
   return Number(processableRuns ?? 0) > 0;
 }
 
+async function hasActiveRunningTask(db: D1Database, runId?: string) {
+  const runningTasks = await scalar<number>(
+    db,
+    runId
+      ? "SELECT COUNT(*) FROM trend_tasks WHERE run_id = ? AND status = 'running'"
+      : "SELECT COUNT(*) FROM trend_tasks WHERE status = 'running'",
+    runId ? [runId] : []
+  );
+
+  return Number(runningTasks ?? 0) > 0;
+}
+
+async function recoverStaleRunningTasks(db: D1Database, runId?: string) {
+  const staleBefore = new Date(Date.now() - STALE_RUNNING_TASK_MS).toISOString();
+
+  await run(
+    db,
+    runId
+      ? `UPDATE trend_tasks
+         SET status = 'pending',
+             completed_pages = 0,
+             started_at = NULL,
+             failure_reason = NULL,
+             failure_snippet = NULL,
+             updated_at = ?
+         WHERE run_id = ?
+           AND status = 'running'
+           AND updated_at < ?`
+      : `UPDATE trend_tasks
+         SET status = 'pending',
+             completed_pages = 0,
+             started_at = NULL,
+             failure_reason = NULL,
+             failure_snippet = NULL,
+             updated_at = ?
+         WHERE status = 'running'
+           AND updated_at < ?`,
+    runId ? [nowIso(), runId, staleBefore] : [nowIso(), staleBefore]
+  );
+
+  await run(
+    db,
+    runId
+      ? `UPDATE trend_runs
+         SET status = 'queued', updated_at = ?
+         WHERE id = ?
+           AND status = 'running'
+           AND EXISTS (SELECT 1 FROM trend_tasks WHERE run_id = trend_runs.id AND status = 'pending')
+           AND NOT EXISTS (SELECT 1 FROM trend_tasks WHERE run_id = trend_runs.id AND status = 'running')`
+      : `UPDATE trend_runs
+         SET status = 'queued', updated_at = ?
+         WHERE status = 'running'
+           AND EXISTS (SELECT 1 FROM trend_tasks WHERE run_id = trend_runs.id AND status = 'pending')
+           AND NOT EXISTS (SELECT 1 FROM trend_tasks WHERE run_id = trend_runs.id AND status = 'running')`,
+    runId ? [nowIso(), runId] : [nowIso()]
+  );
+}
+
 async function processNextQueuedRun(
   env: Env,
   options: { runId?: string; sessionRef?: NaverSessionRef } = {}
@@ -1260,10 +1364,12 @@ async function processNextQueuedRun(
          WHERE id = ?
            AND status IN ('queued', 'running')
            AND id IN (SELECT run_id FROM trend_tasks WHERE status = 'pending')
+           AND id NOT IN (SELECT run_id FROM trend_tasks WHERE status = 'running')
          LIMIT 1`
       : `SELECT * FROM trend_runs
          WHERE status IN ('queued', 'running')
            AND id IN (SELECT run_id FROM trend_tasks WHERE status = 'pending')
+           AND id NOT IN (SELECT run_id FROM trend_tasks WHERE status = 'running')
          ORDER BY updated_at DESC
          LIMIT 1`,
     options.runId ? [options.runId] : []
@@ -1539,7 +1645,7 @@ async function buildRunDetail(db: D1Database, run: TrendCollectionRun): Promise<
     [...new Set(tasks.filter((task) => task.status === "completed").map((task) => task.period))].sort((left, right) => right.localeCompare(left))[0] ??
     [...new Set(profileSnapshots.map((snapshot) => snapshot.period))].sort((left, right) => right.localeCompare(left))[0];
   const expectedPeriods = listMonthlyPeriods(profile.startPeriod, profile.endPeriod);
-  const completedPeriodCount = new Set(profileSnapshots.map((snapshot) => snapshot.period)).size;
+  const completedPeriodCount = new Set(tasks.filter((task) => task.status === "completed").map((task) => task.period)).size;
   const snapshotsPreview = latestCompletedPeriod
     ? visibleSnapshots.filter((snapshot) => snapshot.period === latestCompletedPeriod).slice(0, TREND_PAGE_SIZE)
     : [];
@@ -1561,11 +1667,15 @@ async function buildRunDetail(db: D1Database, run: TrendCollectionRun): Promise<
   const completedDurations = tasks
     .filter((task) => task.status === "completed" && task.startedAt && task.completedAt)
     .map((task) => Math.max(1, (new Date(task.completedAt!).getTime() - new Date(task.startedAt!).getTime()) / 1000));
-  const averageTaskSeconds = completedDurations.length
+  const measuredAverageTaskSeconds = completedDurations.length
     ? Math.round(completedDurations.reduce((sum, value) => sum + value, 0) / completedDurations.length)
     : 8;
+  const minimumNaverTaskSeconds = profile.resultCount === 40 ? 5 : 3;
+  const averageTaskSeconds =
+    processingMode === "naver" ? Math.max(minimumNaverTaskSeconds, measuredAverageTaskSeconds) : measuredAverageTaskSeconds;
   const remainingTasks = Math.max(0, run.totalTasks - run.completedTasks);
-  const etaMinutes = run.status === "completed" || remainingTasks === 0 ? 0 : Math.max(1, Math.ceil((remainingTasks * averageTaskSeconds) / 60));
+  const isActiveRun = run.status === "queued" || run.status === "running";
+  const etaMinutes = !isActiveRun || remainingTasks === 0 ? 0 : Math.max(1, Math.ceil((remainingTasks * averageTaskSeconds) / 60));
   const estimatedCompletionAt =
     etaMinutes > 0 ? new Date(Date.now() + etaMinutes * 60_000).toISOString() : run.completedAt;
   const currentPage = runningTask
@@ -1574,7 +1684,7 @@ async function buildRunDetail(db: D1Database, run: TrendCollectionRun): Promise<
         Math.max(1, runningTask.completedPages + (runningTask.status === "running" && runningTask.completedPages < runningTask.totalPages ? 1 : 0))
       )
     : undefined;
-  const analysisReady = run.status === "completed" && completedPeriodCount >= expectedPeriods.length;
+  const analysisReady = run.status === "completed" && completedPeriodCount >= expectedPeriods.length && profileSnapshots.length > 0;
   const cachedAnalysis = analysisReady ? await readCachedRunAnalysis(db, run.id, expectedPeriods.length) : null;
   const analysis =
     cachedAnalysis ??
@@ -1695,6 +1805,10 @@ async function collectMonthlyRanks(input: {
   const totalPages = getTrendTotalPages(input.resultCount);
 
   for (let page = 1; page <= totalPages; page += 1) {
+    if (page > 1) {
+      await sleep(randomBetween(NAVER_PAGE_DELAY_MIN_MS, NAVER_PAGE_DELAY_MAX_MS));
+    }
+
     const body = new URLSearchParams({
       cid: String(input.categoryCid),
       timeUnit: "month",
@@ -1712,18 +1826,26 @@ async function collectMonthlyRanks(input: {
       body
     });
 
-    if (!Array.isArray(payload.ranks) || payload.ranks.length === 0) {
-      throw new Error(`No ranks were returned for ${input.period} page ${page}.`);
+    if (!Array.isArray(payload.ranks)) {
+      throw new Error(`Invalid rank response for ${input.period} page ${page}.`);
+    }
+
+    if (payload.ranks.length === 0) {
+      if (input.onPageCollected) {
+        await input.onPageCollected(totalPages);
+      }
+
+      if (page === 1) {
+        return [];
+      }
+
+      break;
     }
 
     pages.push(payload);
 
     if (input.onPageCollected) {
       await input.onPageCollected(page);
-    }
-
-    if (page < totalPages) {
-      await sleep(140 + Math.round(Math.random() * 120));
     }
   }
 
@@ -1814,33 +1936,81 @@ async function requestJson<T>(
   pathname: string,
   init: { method?: "GET" | "POST"; body?: URLSearchParams } = {}
 ) {
-  const response = await fetch(`${NAVER_BASE_URL}${pathname}`, {
-    method: init.method ?? "GET",
-    headers: {
-      "User-Agent": NAVER_BROWSER_USER_AGENT,
-      Referer: NAVER_CATEGORY_PAGE_URL,
-      "X-Requested-With": "XMLHttpRequest",
-      Accept: "application/json, text/plain, */*",
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Cookie: Array.from(jar.entries())
-        .map(([name, value]) => `${name}=${value}`)
-        .join("; ")
-    },
-    body: init.body?.toString()
-  });
+  let lastError = "";
 
-  storeResponseCookies(jar, response);
-  const text = await response.text();
+  for (let attempt = 1; attempt <= NAVER_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+    const response = await fetch(`${NAVER_BASE_URL}${pathname}`, {
+      method: init.method ?? "GET",
+      headers: {
+        "User-Agent": NAVER_BROWSER_USER_AGENT,
+        Referer: NAVER_CATEGORY_PAGE_URL,
+        "X-Requested-With": "XMLHttpRequest",
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Cookie: Array.from(jar.entries())
+          .map(([name, value]) => `${name}=${value}`)
+          .join("; ")
+      },
+      body: init.body?.toString()
+    });
 
-  if (!response.ok) {
-    throw new Error(`Naver request failed with status ${response.status}. ${summarizeFailureSnippet(text)}`);
+    storeResponseCookies(jar, response);
+    const text = await response.text();
+
+    if (response.ok && (text.trim().startsWith("<!DOCTYPE html") || text.trim().startsWith("<html"))) {
+      lastError = `Naver returned an HTML error page. ${summarizeFailureSnippet(text)}`;
+    } else if (response.ok) {
+      return JSON.parse(text) as T;
+    } else {
+      lastError = `Naver request failed with status ${response.status}. ${summarizeFailureSnippet(text)}`;
+    }
+
+    if (!shouldRetryNaverRequest(response.status, attempt)) {
+      throw new Error(lastError);
+    }
+
+    await sleep(getNaverRetryDelayMs(response, attempt));
   }
 
-  if (text.trim().startsWith("<!DOCTYPE html") || text.trim().startsWith("<html")) {
-    throw new Error(`Naver returned an HTML error page. ${summarizeFailureSnippet(text)}`);
+  throw new Error(lastError || "Naver request failed after retries.");
+}
+
+function shouldRetryNaverRequest(status: number, attempt: number) {
+  return attempt < NAVER_REQUEST_MAX_ATTEMPTS && (status === 429 || status === 408 || status >= 500);
+}
+
+function getNaverRetryDelayMs(response: Response, attempt: number) {
+  const retryAfter = parseRetryAfterMs(response.headers.get("Retry-After"));
+
+  if (retryAfter) {
+    return Math.min(retryAfter, 60_000);
   }
 
-  return JSON.parse(text) as T;
+  const baseDelay = response.status === 429 ? NAVER_RATE_LIMIT_BASE_DELAY_MS : NAVER_TRANSIENT_BASE_DELAY_MS;
+  const exponentialDelay = baseDelay * Math.max(1, attempt);
+  return Math.min(exponentialDelay + randomBetween(800, 2_800), 60_000);
+}
+
+function parseRetryAfterMs(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1_000);
+  }
+
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return null;
+}
+
+function randomBetween(min: number, max: number) {
+  return min + Math.round(Math.random() * Math.max(0, max - min));
 }
 
 function storeResponseCookies(jar: Map<string, string>, response: Response) {
@@ -2103,16 +2273,20 @@ function monthPeriodToDateRange(period: string) {
 function mergeKeywordRankPages(pages: NaverKeywordRankPage[], expectedCount: TrendResultCount) {
   const merged = pages.flatMap((page) => page.ranks).sort((left, right) => left.rank - right.rank);
 
-  if (merged.length !== expectedCount) {
-    throw new Error(`Expected ${expectedCount} keywords but received ${merged.length}.`);
+  if (merged.length === 0) {
+    return [];
+  }
+
+  if (merged.length > expectedCount) {
+    throw new Error(`Expected up to ${expectedCount} keywords but received ${merged.length}.`);
   }
 
   const uniqueRanks = new Set(merged.map((item) => item.rank));
-  if (uniqueRanks.size !== expectedCount) {
+  if (uniqueRanks.size !== merged.length) {
     throw new Error("Duplicate ranks detected while merging keyword pages.");
   }
 
-  if (merged[0]?.rank !== 1 || merged[merged.length - 1]?.rank !== expectedCount) {
+  if (merged.some((item, index) => item.rank !== index + 1)) {
     throw new Error("Rank range is incomplete.");
   }
 

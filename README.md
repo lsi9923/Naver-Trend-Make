@@ -13,8 +13,9 @@
 
 ## 바탕화면 실행 파일
 
-현재 GitHub 백업에는 바탕화면에서 쓰던 실행 파일도 같이 포함되어 있습니다.
+대표 실행 파일은 저장소 루트의 `Naver Trend Maker 10.exe`입니다. 이 파일은 바탕화면의 `Naver Trend Maker 10 로컬버전.exe`와 같은 로컬버전입니다.
 
+- `Naver Trend Maker 10.exe`
 - `desktop-artifacts/Naver Trend Maker 10 로컬버전.exe`
 - `desktop-artifacts/Naver Trend Maker 10 Cloudflare 연결.exe`
 - `desktop-artifacts/Naver Trend Maker 10 Cloudflare 연결.cmd`

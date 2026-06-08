@@ -8,6 +8,7 @@ import {
   buildTrendCollectionInputForCategory,
   createTrendCollectionSettingsSnapshot,
   runTrendAutoCollectionQueue,
+  sliceTrendAutoCollectionQueueFromCategory,
   stopTrendAutoCollectionRun
 } from "../../shared/dist/index.js";
 
@@ -145,6 +146,36 @@ test("auto-start-without-selected-category-queues-all-root-leaves", async () => 
     "auto collection with no selected category should flatten every first-level root in stable order"
   );
   assert.deepEqual(requestedParents, [1, 2, 10], "all non-leaf roots should be fetched while leaf categories are not fetched again");
+});
+
+test("auto-start-can-resume-from-selected-category-in-full-queue", async () => {
+  const childrenByCid = new Map([
+    [1, [categoryA, categoryB]],
+    [2, [categoryA1, categoryA2]],
+    [10, [categoryC]]
+  ]);
+  const fullQueue = await buildTrendAutoCollectionQueueForRoots([rootCategory, rootCategory2], async (cid) => {
+    return childrenByCid.get(cid) ?? [];
+  });
+
+  const resumedFromLeaf = sliceTrendAutoCollectionQueueFromCategory(fullQueue, categoryA2);
+
+  assert.equal(resumedFromLeaf.found, true);
+  assert.equal(resumedFromLeaf.skippedCount, 1);
+  assert.deepEqual(
+    resumedFromLeaf.queue.map((category) => category.cid),
+    [5, 3, 11],
+    "resume mode should skip already handled categories and continue through the rest of the full queue"
+  );
+
+  const resumedFromParent = sliceTrendAutoCollectionQueueFromCategory(fullQueue, categoryA);
+
+  assert.equal(resumedFromParent.found, true);
+  assert.deepEqual(
+    resumedFromParent.queue.map((category) => category.cid),
+    [4, 5, 3, 11],
+    "resuming from a parent category should start at its first leaf category"
+  );
 });
 
 test("auto-stop-cancels-active-run", async () => {
@@ -350,6 +381,16 @@ test("auto-collection-collects-best-products-after-each-settled-category", () =>
     pageSource,
     /retryApiOperation\(\s*\(\) => collectBestProductsForCategory\(apiBaseUrl,\s*_result\.category,\s*settings,\s*_result\.run\?\.id\)/s,
     "auto collection should retry best-product collection after each category run settles"
+  );
+  assert.match(
+    pageSource,
+    /data-testid="auto-collection-resume-start"/,
+    "auto collection should expose a start-from-selected-category control"
+  );
+  assert.match(
+    pageSource,
+    /sliceTrendAutoCollectionQueueFromCategory\(fullQueue,\s*selectedCategory\)/,
+    "resume start should skip categories before the selected category in the full queue"
   );
   assert.match(
     pageSource,

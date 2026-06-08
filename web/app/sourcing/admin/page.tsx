@@ -38,6 +38,7 @@ import {
   listMonthlyPeriods,
   normalizeTrendExcludedTermsForMode,
   runTrendAutoCollectionQueue,
+  sliceTrendAutoCollectionQueueFromCategory,
   splitTrendExcludedTermsInput,
   stopTrendAutoCollectionRun,
   type TrendAdminBoard,
@@ -172,6 +173,7 @@ type ActionModalState =
   | null;
 
 type SetupPanel = "settings" | "guide" | null;
+type AutoCollectionStartMode = "selected-scope" | "resume-from-selected";
 
 type AutoCollectionState = {
   status: "idle" | "preparing" | "running" | "stopping" | "stopped" | "completed" | "failed";
@@ -676,10 +678,19 @@ export default function SourcingAdminPage() {
     void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
   }
 
-  async function handleStartAutoCollection() {
+  async function handleStartAutoCollection(mode: AutoCollectionStartMode = "selected-scope") {
     if (!apiBaseUrl) {
       setActiveSetupPanel("settings");
       setError("먼저 Cloudflare Worker API 주소를 설정해 주세요.");
+      return;
+    }
+
+    if (mode === "resume-from-selected" && !selectedCategory) {
+      setError("이어 시작할 카테고리를 먼저 선택해 주세요.");
+      setFeedback({
+        tone: "error",
+        text: "중간부터 자동 시작하려면 1분류, 2분류, 3분류 중 시작할 카테고리를 선택해야 합니다."
+      });
       return;
     }
 
@@ -703,49 +714,64 @@ export default function SourcingAdminPage() {
       text: "자동 순회 대상을 확인하고 있습니다."
     });
 
-    const rootCategories = selectedCategory
-      ? [selectedCategory]
-      : level1Categories.length
-        ? level1Categories
-        : STATIC_TREND_ROOT_CATEGORIES;
-    const rootPath = selectedCategory?.fullPath ?? "전체 카테고리";
+    const resumeFromSelected = mode === "resume-from-selected" && Boolean(selectedCategory);
+    const allRootCategories = level1Categories.length ? level1Categories : STATIC_TREND_ROOT_CATEGORIES;
+    const rootCategories = resumeFromSelected ? allRootCategories : selectedCategory ? [selectedCategory] : allRootCategories;
+    const rootPath = resumeFromSelected
+      ? `전체 카테고리 · ${selectedCategory?.fullPath}부터`
+      : selectedCategory?.fullPath ?? "전체 카테고리";
 
     setAutoCollection({
       ...initialAutoCollectionState,
       status: "preparing",
       rootPath,
-      message: selectedCategory
-        ? `${selectedCategory.fullPath} 하위 카테고리를 불러오는 중입니다.`
-        : "선택된 카테고리가 없어 1분류 전체 카테고리를 불러오는 중입니다.",
+      message: resumeFromSelected
+        ? `전체 카테고리 큐에서 ${selectedCategory?.fullPath} 위치를 찾는 중입니다.`
+        : selectedCategory
+          ? `${selectedCategory.fullPath} 하위 카테고리를 불러오는 중입니다.`
+          : "선택된 카테고리가 없어 1분류 전체 카테고리를 불러오는 중입니다.",
       settingsPills
     });
 
-    const queue = selectedCategory
+    const fullQueue = selectedCategory && !resumeFromSelected
       ? await buildTrendAutoCollectionQueue(selectedCategory, (cid) => fetchTrendCategoriesForAutoQueue(apiBaseUrl, cid))
       : await buildTrendAutoCollectionQueueForRoots(rootCategories, (cid) => fetchTrendCategoriesForAutoQueue(apiBaseUrl, cid));
+    const queueStart = resumeFromSelected
+      ? sliceTrendAutoCollectionQueueFromCategory(fullQueue, selectedCategory)
+      : {
+          queue: fullQueue,
+          found: true,
+          startIndex: 0,
+          skippedCount: 0
+        };
+    const queue = queueStart.queue;
 
     if (!queue.length) {
       setSubmitting(false);
-      setError("자동 순회할 카테고리를 찾지 못했습니다.");
+      const message = resumeFromSelected && !queueStart.found
+        ? "선택한 카테고리를 전체 자동순회 큐에서 찾지 못했습니다."
+        : "자동 순회할 카테고리를 찾지 못했습니다.";
+      setError(message);
       setAutoCollection((current) => ({
         ...current,
         status: "failed",
-        message: "자동 순회할 카테고리를 찾지 못했습니다."
+        message
       }));
       return;
     }
 
+    const resumePrefix = queueStart.skippedCount > 0 ? `${queueStart.skippedCount}개 카테고리를 건너뛰고 ` : "";
     setSubmitting(false);
     setAutoCollection((current) => ({
       ...current,
       status: "running",
       queue,
       currentIndex: 0,
-      message: `${queue.length}개 카테고리를 순서대로 취합합니다.`
+      message: `${resumePrefix}${queue.length}개 카테고리를 순서대로 취합합니다.`
     }));
     setFeedback({
       tone: "info",
-      text: `${queue.length}개 카테고리 자동 순회를 시작했습니다. 완료된 트렌드 분석 후보를 누적하고 전체 순위를 재정렬합니다.`
+      text: `${resumePrefix}${queue.length}개 카테고리 자동 순회를 시작했습니다. 완료된 트렌드 분석 후보를 누적하고 전체 순위를 재정렬합니다.`
     });
 
     const summary = await runTrendAutoCollectionQueue({
@@ -1603,13 +1629,25 @@ export default function SourcingAdminPage() {
                 <button
                   className={styles.secondaryButton}
                   type="button"
-                  onClick={() => void handleStartAutoCollection()}
+                  onClick={() => void handleStartAutoCollection("selected-scope")}
                   disabled={submitting || autoCollectionActive || !apiConfigured}
                   data-testid="auto-collection-start"
                   aria-describedby="auto-collection-status"
                 >
                   {autoCollection.status === "preparing" ? <LoaderCircle className={styles.spinningIcon} size={16} /> : <PlayCircle size={16} />}
                   자동 시작
+                </button>
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => void handleStartAutoCollection("resume-from-selected")}
+                  disabled={submitting || autoCollectionActive || !apiConfigured || !selectedCategory}
+                  data-testid="auto-collection-resume-start"
+                  aria-describedby="auto-collection-status"
+                  title="전체 자동순회 큐에서 선택한 카테고리 앞부분은 건너뛰고 이후 카테고리부터 시작합니다."
+                >
+                  <ArrowRight size={16} />
+                  여기부터 자동 시작
                 </button>
                 <button
                   className={`${styles.secondaryButton} ${styles.warningButton}`}

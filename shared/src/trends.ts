@@ -456,6 +456,44 @@ export async function buildTrendAutoCollectionQueueForRoots(
   return leaves;
 }
 
+export function sliceTrendAutoCollectionQueueFromCategory(
+  queue: TrendCategoryNode[],
+  startCategory: TrendCategoryNode | null | undefined
+) {
+  if (!startCategory) {
+    return {
+      queue: [...queue],
+      found: true,
+      startIndex: 0,
+      skippedCount: 0
+    };
+  }
+
+  const descendantPrefix = `${startCategory.fullPath} >`;
+  const startIndex = queue.findIndex(
+    (category) =>
+      category.cid === startCategory.cid ||
+      category.fullPath === startCategory.fullPath ||
+      category.fullPath.startsWith(descendantPrefix)
+  );
+
+  if (startIndex < 0) {
+    return {
+      queue: [] as TrendCategoryNode[],
+      found: false,
+      startIndex: -1,
+      skippedCount: queue.length
+    };
+  }
+
+  return {
+    queue: queue.slice(startIndex),
+    found: true,
+    startIndex,
+    skippedCount: startIndex
+  };
+}
+
 async function appendTrendAutoCollectionLeaves(
   category: TrendCategoryNode,
   loadChildren: (cid: number) => Promise<TrendCategoryNode[]>,

@@ -1,5 +1,0 @@
-{
-  "ok": false,
-  "code": "INVALID_BEST_PRODUCT_INPUT",
-  "message": "분석 후보를 누적할 카테고리와 완료 run을 확인하지 못했습니다."
-}

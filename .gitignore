@@ -17,6 +17,9 @@ edge-api/.wrangler/
 .env
 .env.*
 .local
+.omo/
+.omx/
+NAVER_TREND_MAKER_CONTEXT.md
 coverage
 .DS_Store
 *.tsbuildinfo

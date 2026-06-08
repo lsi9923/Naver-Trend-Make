@@ -1,0 +1,10 @@
+
+ ⛅️ wrangler 4.80.0 (update available 4.98.0)
+─────────────────────────────────────────────
+Total Upload: 118.55 KiB / gzip: 26.15 KiB
+Your Worker has access to the following bindings:
+Binding                                     Resource                  
+env.DB (naver-trend-maker-db)               D1 Database               
+env.APP_NAME ("naver-trend-maker-api")      Environment Variable      
+
+--dry-run: exiting now.

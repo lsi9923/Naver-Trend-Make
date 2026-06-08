@@ -1,0 +1,102 @@
+{
+  "collectCount": 3,
+  "lastCollect": {
+    "name": "패션의류 > 여성의류 > 니트 · 모바일 · 남성 · 30대 · Top20",
+    "categoryCid": 50021279,
+    "categoryPath": "패션의류 > 여성의류 > 니트",
+    "categoryDepth": 3,
+    "timeUnit": "month",
+    "devices": [
+      "mo"
+    ],
+    "genders": [
+      "m"
+    ],
+    "ages": [
+      "30"
+    ],
+    "spreadsheetId": "",
+    "resultCount": 20,
+    "excludeBrandProducts": false,
+    "customExcludedTerms": [
+      "나이키",
+      "아디다스"
+    ]
+  },
+  "visibleChecks": {
+    "showsCategory": true,
+    "showsTop20": true,
+    "showsOriginalKeyword": true,
+    "showsMobile": true,
+    "showsMale": true,
+    "showsAge30": true
+  },
+  "allCollects": [
+    {
+      "name": "패션의류 > 여성의류 > 니트 · PC · 여성 · 20대 · Top40 · 브랜드 제외",
+      "categoryCid": 50021279,
+      "categoryPath": "패션의류 > 여성의류 > 니트",
+      "categoryDepth": 3,
+      "timeUnit": "month",
+      "devices": [
+        "pc"
+      ],
+      "genders": [
+        "f"
+      ],
+      "ages": [
+        "20"
+      ],
+      "spreadsheetId": "",
+      "resultCount": 40,
+      "excludeBrandProducts": true,
+      "customExcludedTerms": []
+    },
+    {
+      "name": "패션의류 > 여성의류 > 니트 · PC · 여성 · 20대 · Top40 · 브랜드 제외",
+      "categoryCid": 50021279,
+      "categoryPath": "패션의류 > 여성의류 > 니트",
+      "categoryDepth": 3,
+      "timeUnit": "month",
+      "devices": [
+        "pc"
+      ],
+      "genders": [
+        "f"
+      ],
+      "ages": [
+        "20"
+      ],
+      "spreadsheetId": "",
+      "resultCount": 40,
+      "excludeBrandProducts": true,
+      "customExcludedTerms": [
+        "나이키",
+        "아디다스"
+      ]
+    },
+    {
+      "name": "패션의류 > 여성의류 > 니트 · 모바일 · 남성 · 30대 · Top20",
+      "categoryCid": 50021279,
+      "categoryPath": "패션의류 > 여성의류 > 니트",
+      "categoryDepth": 3,
+      "timeUnit": "month",
+      "devices": [
+        "mo"
+      ],
+      "genders": [
+        "m"
+      ],
+      "ages": [
+        "30"
+      ],
+      "spreadsheetId": "",
+      "resultCount": 20,
+      "excludeBrandProducts": false,
+      "customExcludedTerms": [
+        "나이키",
+        "아디다스"
+      ]
+    }
+  ]
+}

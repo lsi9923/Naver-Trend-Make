@@ -1,0 +1,85 @@
+{
+  "info": {
+    "hasCompletedMessage": false,
+    "hasRunningMessage": true,
+    "containsFailed344": false,
+    "containsApiFailed": false,
+    "autoPanelSample": "자동 카테고리 순회\n\n가구/인테리어 > 인테리어소품 > 조명\n\n순회 중\n\n1/1 가구/인테리어 > 인테리어소품 > 조명 취합 중\n\n자동 진행\n0/1\n조명\n완료\n0건\n완료된 카테고리\n실패/중지\n0건\n실패 또는 취소\n\n1/1 가구/인테리어 > 인테리어소품 > 조명 취합 중\n\nTop 20\n기기 전체\n성별 전체\n연령 전체\n원본 키워드\n1개 카테고리 자동 순회를 시작했습니다.\n분석 시작\n자동 시작\n자동 종료\n\n"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/categories/0"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/runs/2f72cca0-e5be-4964-a2fc-25633aa55ee0/snapshots?period=2026-05&page=1"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/runs/2f72cca0-e5be-4964-a2fc-25633aa55ee0"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/categories/50000004"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/categories/50000108"
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8787/v1/trends/collect"
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06/heartbeat"
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06/heartbeat"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06"
+    }
+  ],
+  "responses": [
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/categories/0",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/runs/2f72cca0-e5be-4964-a2fc-25633aa55ee0/snapshots?period=2026-05&page=1",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/runs/2f72cca0-e5be-4964-a2fc-25633aa55ee0",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/categories/50000004",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/categories/50000108",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/collect",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06/heartbeat",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06/heartbeat",
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:8787/v1/trends/runs/dd1b8c11-053c-4e5a-9223-a41f70d36c06",
+      "status": 200
+    }
+  ]
+}

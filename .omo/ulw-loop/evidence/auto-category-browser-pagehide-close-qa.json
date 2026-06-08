@@ -1,0 +1,44 @@
+{
+  "allPass": false,
+  "checkedAt": "2026-06-07T19:01:32.770Z",
+  "scenario": "tab-close-cancels-active-run",
+  "note": "Browser plugin tab.close may not dispatch page lifecycle events; navigation-away evidence covers pagehide/beforeunload delivery.",
+  "beforeClose": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "categoryDepth": 3,
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": []
+  },
+  "afterClose": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "categoryDepth": 3,
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": []
+  }
+}

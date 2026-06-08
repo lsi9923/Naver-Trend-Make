@@ -1,0 +1,49 @@
+{
+  "allPass": true,
+  "checkedAt": "2026-06-07T19:38:39.303Z",
+  "scenario": "stop-clicked-while-collect-request-pending",
+  "staticUrl": "http://127.0.0.1:32132/sourcing/admin.html?qa=pending-stop",
+  "apiBase": "http://127.0.0.1:32133/v1",
+  "beforeRelease": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": []
+  },
+  "afterRelease": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": [
+      "run-1-50021279"
+    ],
+    "heartbeatRequests": [
+      "run-1-50021279"
+    ],
+    "autoPanel": "자동 카테고리 순회\n\n패션의류\n\n중지됨\n\n자동 순회를 중지했습니다. 1/14개 카테고리를 처리했습니다.\n\n자동 진행\n1/14\n니트\n완료\n0건\n완료된 카테고리\n실패/중지\n1건\n실패 또는 취소\n\n자동 순회를 중지했습니다. 1/14개 카테고리를 처리했습니다.\n\nTop 20\n기기 전체\n성별 전체\n연령 전체\n원본 키워드"
+  }
+}

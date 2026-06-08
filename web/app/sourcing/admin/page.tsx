@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Flame,
   PauseCircle,
+  PlayCircle,
   RefreshCw,
   LoaderCircle,
   PlugZap,
@@ -28,9 +29,17 @@ import {
 import {
   TREND_MONTHLY_START_PERIOD,
   TREND_RESULT_COUNT_OPTIONS,
+  buildTrendAutoCollectionQueue,
+  buildTrendAutoCollectionQueueForRoots,
+  buildTrendCollectionInputForCategory,
+  createTrendCollectionSettingsSnapshot,
   getLatestCollectibleTrendPeriod,
   getTrendTotalPages,
   listMonthlyPeriods,
+  normalizeTrendExcludedTermsForMode,
+  runTrendAutoCollectionQueue,
+  splitTrendExcludedTermsInput,
+  stopTrendAutoCollectionRun,
   type TrendAdminBoard,
   type TrendAgeCode,
   type TrendAnalysisCard,
@@ -39,11 +48,13 @@ import {
   type TrendAnalysisKeyword,
   type TrendAnalysisSeriesPoint,
   type TrendCategoryNode,
+  type TrendCollectionSettingsSnapshot,
   type TrendDeviceCode,
   type TrendGenderCode,
   type TrendKeywordDrilldownSeries,
   type TrendKeywordSnapshot,
   type TrendMonthlyExplorer,
+  type TrendProfileInput,
   type TrendResultCount,
   type TrendRunDetail
 } from "@runacademy/shared";
@@ -52,6 +63,10 @@ import styles from "./admin.module.css";
 
 const ENV_API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL ?? "");
 const API_BASE_STORAGE_KEY = "hanirum:naver-trend-api-base-url";
+const AUTO_COLLECTION_POLL_MS = 1500;
+const AUTO_COLLECTION_HEARTBEAT_MS = 5000;
+const AUTO_COLLECTION_API_RETRY_ATTEMPTS = 60;
+const AUTO_COLLECTION_API_RETRY_DELAY_MS = 3000;
 
 const DEVICE_OPTIONS = [
   ["pc", "PC"],
@@ -81,9 +96,29 @@ type ApiError = {
 type TrendBoardResponse = ApiError | { ok: true; board: TrendAdminBoard };
 type TrendCategoryResponse = ApiError | { ok: true; nodes: TrendCategoryNode[] };
 type TrendCollectResponse = ApiError | { ok: true; run: TrendRunDetail; reusedCachedResult?: boolean };
+type BestProductCollectResponse =
+  | ApiError
+  | {
+      ok: true;
+      collectionStatus: "collected" | "failed" | "empty";
+      message?: string;
+      items?: Array<{ status: string; categoryName: string; title: string; failureReason?: string }>;
+    };
+type BestProductStatusResponse =
+  | ApiError
+  | {
+      ok: true;
+      ready: boolean;
+      credentialStatus: "configured" | "missing" | "trend-analysis-ready";
+      source: string;
+      outputFileName: string;
+      requiredEnvVars: string[];
+      aliasEnvVars: string[];
+    };
 type TrendRunActionResponse = ApiError | { ok: true; run?: TrendRunDetail; deletedRunId?: string };
 type TrendRunRetryResponse = ApiError | { ok: true; run: TrendRunDetail };
 type TrendRunResponse = ApiError | { ok: true; run: TrendRunDetail };
+type TrendRunSettleResult = TrendRunDetail | Pick<TrendRunDetail, "id" | "status">;
 type TrendSnapshotPageResponse =
   | ApiError
   | {
@@ -122,6 +157,13 @@ type BuilderFeedback = {
   text: string;
 };
 
+type BestProductStatusState = {
+  ready: boolean;
+  credentialStatus: "configured" | "missing" | "trend-analysis-ready" | "unknown";
+  outputFileName: string;
+  message: string;
+};
+
 type ActionModalState =
   | {
       type: "cancel" | "delete";
@@ -130,6 +172,19 @@ type ActionModalState =
   | null;
 
 type SetupPanel = "settings" | "guide" | null;
+
+type AutoCollectionState = {
+  status: "idle" | "preparing" | "running" | "stopping" | "stopped" | "completed" | "failed";
+  queue: TrendCategoryNode[];
+  currentIndex: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  activeRunId: string | null;
+  rootPath: string | null;
+  message: string;
+  settingsPills: string[];
+};
 
 const initialForm: TrendFormState = {
   category1: "",
@@ -143,6 +198,26 @@ const initialForm: TrendFormState = {
   customExcludedTerms: ""
 };
 
+const initialAutoCollectionState: AutoCollectionState = {
+  status: "idle",
+  queue: [],
+  currentIndex: -1,
+  completedCount: 0,
+  failedCount: 0,
+  cancelledCount: 0,
+  activeRunId: null,
+  rootPath: null,
+  message: "자동 순회를 시작하면 선택 카테고리의 하위 카테고리를 순서대로 취합합니다.",
+  settingsPills: []
+};
+
+const initialBestProductStatus: BestProductStatusState = {
+  ready: false,
+  credentialStatus: "unknown",
+  outputFileName: "Naver Trend Maker 10 베스트상품.xlsx",
+  message: "트렌드 분석 누적 상태를 확인하는 중입니다."
+};
+
 export default function SourcingAdminPage() {
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getInitialApiBaseUrl());
   const [apiBaseUrlDraft, setApiBaseUrlDraft] = useState(() => getInitialApiBaseUrl());
@@ -153,6 +228,7 @@ export default function SourcingAdminPage() {
   const [level2Categories, setLevel2Categories] = useState<TrendCategoryNode[]>([]);
   const [level3Categories, setLevel3Categories] = useState<TrendCategoryNode[]>([]);
   const [form, setForm] = useState<TrendFormState>(initialForm);
+  const [autoCollection, setAutoCollection] = useState<AutoCollectionState>(initialAutoCollectionState);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -160,6 +236,7 @@ export default function SourcingAdminPage() {
   const [retrySubmitting, setRetrySubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<BuilderFeedback | null>(null);
+  const [bestProductStatus, setBestProductStatus] = useState<BestProductStatusState>(initialBestProductStatus);
   const [snapshotPanel, setSnapshotPanel] = useState<SnapshotPanelState | null>(null);
   const [actionModal, setActionModal] = useState<ActionModalState>(null);
   const [selectedPlannerMonth, setSelectedPlannerMonth] = useState("01");
@@ -167,6 +244,9 @@ export default function SourcingAdminPage() {
   const [heatmapMode, setHeatmapMode] = useState<"timeline" | "season">("season");
   const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
   const drilldownRef = useRef<HTMLElement | null>(null);
+  const autoStopRequestedRef = useRef(false);
+  const autoActiveRunIdRef = useRef<string | null>(null);
+  const autoExitCancelSentRef = useRef(false);
 
   const latestCollectiblePeriod = getLatestCollectibleTrendPeriod();
   const analysisPeriods = listMonthlyPeriods(TREND_MONTHLY_START_PERIOD, latestCollectiblePeriod);
@@ -191,6 +271,11 @@ export default function SourcingAdminPage() {
   const estimatedSecondsPerMonth = form.resultCount === 40 ? 11 : 6;
   const estimatedLeadMinutes = Math.max(1, Math.ceil((analysisPeriods.length * estimatedSecondsPerMonth) / 60));
   const pollingActive = visibleRun?.status === "running" || visibleRun?.status === "queued";
+  const autoCollectionActive = autoCollection.status === "preparing" || autoCollection.status === "running" || autoCollection.status === "stopping";
+  const autoCollectionTotal = autoCollection.queue.length;
+  const autoCollectionHandled = autoCollection.completedCount + autoCollection.failedCount + autoCollection.cancelledCount;
+  const autoCollectionCurrentCategory =
+    autoCollection.currentIndex >= 0 ? autoCollection.queue[autoCollection.currentIndex] ?? null : null;
   const refreshTitle = pollingActive ? "자동으로 최신 상태를 확인하고 있습니다." : "데이터 취합 상태 연결이 안정적으로 유지되고 있습니다.";
   const refreshHint = refreshing
     ? "새 수집 상태를 가져오는 중입니다."
@@ -240,7 +325,7 @@ export default function SourcingAdminPage() {
 
       if (boardResponse.ok) {
         setTrendBoard(boardResponse.board);
-        setCurrentRun(boardResponse.board.runs[0] ?? null);
+        setCurrentRun(pickDefaultVisibleRun(boardResponse.board.runs));
       } else {
         setError(boardResponse.message ?? "데이터 취합 상태를 불러오지 못했습니다.");
       }
@@ -263,16 +348,21 @@ export default function SourcingAdminPage() {
 
     setCurrentRun((previous) => {
       if (!previous) {
-        return trendBoard.runs[0];
+        return pickDefaultVisibleRun(trendBoard.runs);
       }
 
       const matched = trendBoard.runs.find((run) => run.id === previous.id);
-      return matched ? mergeRunDetail(previous, matched) : trendBoard.runs[0];
+      return matched ? mergeRunDetail(previous, matched) : pickDefaultVisibleRun(trendBoard.runs);
     });
   }, [trendBoard]);
 
   useEffect(() => {
     if (!apiBaseUrl) {
+      setBestProductStatus({
+        ...initialBestProductStatus,
+        credentialStatus: "unknown",
+        message: "API 연결 후 베스트상품 수집 상태를 확인합니다."
+      });
       return;
     }
 
@@ -282,6 +372,77 @@ export default function SourcingAdminPage() {
 
     return () => window.clearInterval(interval);
   }, [apiBaseUrl, visibleRun?.status]);
+
+  useEffect(() => {
+    if (!apiBaseUrl) {
+      return;
+    }
+
+    void refreshBestProductStatus(apiBaseUrl, setBestProductStatus);
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    function requestAutoCollectionExitCancel() {
+      const activeRunId = autoActiveRunIdRef.current;
+
+      if (!apiBaseUrl || !activeRunId || autoExitCancelSentRef.current) {
+        return;
+      }
+
+      autoExitCancelSentRef.current = true;
+      const cancelUrl = `${apiBaseUrl}/trends/runs/${activeRunId}/cancel`;
+
+      if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+        navigator.sendBeacon(cancelUrl);
+      }
+
+      void fetch(cancelUrl, {
+        method: "POST",
+        keepalive: true
+      });
+    }
+
+    function stopAutoCollectionOnPageExit() {
+      autoStopRequestedRef.current = true;
+      requestAutoCollectionExitCancel();
+    }
+
+    window.addEventListener("pagehide", stopAutoCollectionOnPageExit);
+    window.addEventListener("beforeunload", stopAutoCollectionOnPageExit);
+    window.addEventListener("unload", stopAutoCollectionOnPageExit);
+    const previousBeforeUnload = window.onbeforeunload;
+    window.onbeforeunload = (event) => {
+      stopAutoCollectionOnPageExit();
+
+      if (typeof previousBeforeUnload === "function") {
+        return previousBeforeUnload.call(window, event);
+      }
+
+      return undefined;
+    };
+
+    return () => {
+      window.removeEventListener("pagehide", stopAutoCollectionOnPageExit);
+      window.removeEventListener("beforeunload", stopAutoCollectionOnPageExit);
+      window.removeEventListener("unload", stopAutoCollectionOnPageExit);
+      window.onbeforeunload = previousBeforeUnload;
+    };
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    const activeRunId = autoCollection.activeRunId;
+
+    if (!apiBaseUrl || !autoCollectionActive || !activeRunId) {
+      return;
+    }
+
+    void sendTrendRunHeartbeat(apiBaseUrl, activeRunId);
+    const interval = window.setInterval(() => {
+      void sendTrendRunHeartbeat(apiBaseUrl, activeRunId);
+    }, AUTO_COLLECTION_HEARTBEAT_MS);
+
+    return () => window.clearInterval(interval);
+  }, [apiBaseUrl, autoCollection.activeRunId, autoCollectionActive]);
 
   useEffect(() => {
     if (!form.category1) {
@@ -425,26 +586,23 @@ export default function SourcingAdminPage() {
     setError(null);
     setFeedback({
       tone: "info",
-      text: "조건을 저장하고 바로 데이터 취합을 시작하고 있습니다."
+      text: "조건을 저장하고 데이터 취합 후 같은 트렌드 분석 방식으로 후보 누적까지 이어서 실행합니다."
     });
 
-    const response = await api<TrendCollectResponse>(apiBaseUrl, "/trends/collect", {
-      method: "POST",
-      body: JSON.stringify({
-        name: buildAnalysisRequestName(selectedCategory.fullPath, form),
-        categoryCid: selectedCategory.cid,
-        categoryPath: selectedCategory.fullPath,
-        categoryDepth: selectedCategory.level,
-        timeUnit: "month",
-        devices: form.devices,
-        genders: form.genders,
-        ages: form.ages,
-        spreadsheetId: "",
-        resultCount: form.resultCount,
-        excludeBrandProducts: form.excludeBrandProducts,
-        customExcludedTerms: splitExcludedTerms(form.customExcludedTerms)
-      })
+    const settings = createTrendCollectionSettingsSnapshot({
+      devices: form.devices,
+      genders: form.genders,
+      ages: form.ages,
+      resultCount: form.resultCount,
+      excludeBrandProducts: form.excludeBrandProducts,
+      customExcludedTermsInput: form.customExcludedTerms
     });
+    const payload = buildTrendCollectionInputForCategory(
+      selectedCategory,
+      settings,
+      buildAnalysisRequestName(selectedCategory.fullPath, settings)
+    );
+    const response = await startTrendCollectionRequest(apiBaseUrl, payload);
 
     setSubmitting(false);
 
@@ -474,12 +632,315 @@ export default function SourcingAdminPage() {
     );
     setFeedback({
       tone: "success",
-      text: response.reusedCachedResult
-        ? "기존에 완료한 작업 결과를 바로 불러왔습니다. 추가 수집 없이 리포트를 바로 확인할 수 있습니다."
-        : "데이터 취합을 시작했습니다. 오른쪽 패널에서 진행 상황과 분석 결과를 확인해 주세요."
+      text: "데이터 취합을 시작했습니다. 완료되면 트렌드 분석 후보를 바로 누적합니다."
+    });
+
+    void collectBestProductsAfterSingleAnalysis(response.run, selectedCategory, settings);
+    void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
+  }
+
+  async function collectBestProductsAfterSingleAnalysis(
+    startedRun: TrendRunDetail,
+    category: TrendCategoryNode,
+    settings: TrendCollectionSettingsSnapshot
+  ) {
+    const settledRun =
+      startedRun.status === "queued" || startedRun.status === "running"
+        ? await waitForTrendRunToSettle(apiBaseUrl, startedRun.id)
+        : startedRun;
+
+    if (isTrendRunDetail(settledRun)) {
+      setCurrentRun((previous) => (previous?.id === settledRun.id ? mergeRunDetail(previous, settledRun) : settledRun));
+      setTrendBoard((previous) => upsertRunOnBoard(previous, settledRun));
+    }
+
+    if (settledRun.status !== "completed") {
+      setFeedback({
+        tone: "error",
+        text: `${category.name} 데이터 취합이 ${runStatusLabel(settledRun.status)} 상태라 분석 후보 누적은 실행하지 않았습니다.`
+      });
+      return;
+    }
+
+    const bestProductResponse = await collectBestProductsForCategory(apiBaseUrl, category, settings, settledRun.id);
+
+    setFeedback({
+      tone: bestProductResponse.ok && bestProductResponse.collectionStatus === "collected" ? "success" : "error",
+      text: bestProductResponse.ok
+        ? bestProductResponse.collectionStatus === "collected"
+          ? `${category.name} 트렌드 분석 후보 ${(bestProductResponse.items ?? []).length}개를 누적하고 전체 순위를 갱신했습니다.`
+          : `${category.name} 분석 후보 누적 ${bestProductResponse.collectionStatus === "empty" ? "빈 결과" : "실패"}: ${bestProductResponse.message ?? "원인 확인 필요"}`
+        : `${category.name} 분석 후보 누적 API 실패: ${bestProductResponse.message ?? "API 연결 실패"}`
     });
 
     void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
+  }
+
+  async function handleStartAutoCollection() {
+    if (!apiBaseUrl) {
+      setActiveSetupPanel("settings");
+      setError("먼저 Cloudflare Worker API 주소를 설정해 주세요.");
+      return;
+    }
+
+    const settings = createTrendCollectionSettingsSnapshot({
+      devices: form.devices,
+      genders: form.genders,
+      ages: form.ages,
+      resultCount: form.resultCount,
+      excludeBrandProducts: form.excludeBrandProducts,
+      customExcludedTermsInput: form.customExcludedTerms
+    });
+    const settingsPills = formatSettingsSnapshotPills(settings);
+
+    autoStopRequestedRef.current = false;
+    autoActiveRunIdRef.current = null;
+    autoExitCancelSentRef.current = false;
+    setSubmitting(true);
+    setError(null);
+    setFeedback({
+      tone: "info",
+      text: "자동 순회 대상을 확인하고 있습니다."
+    });
+
+    const rootCategories = selectedCategory
+      ? [selectedCategory]
+      : level1Categories.length
+        ? level1Categories
+        : STATIC_TREND_ROOT_CATEGORIES;
+    const rootPath = selectedCategory?.fullPath ?? "전체 카테고리";
+
+    setAutoCollection({
+      ...initialAutoCollectionState,
+      status: "preparing",
+      rootPath,
+      message: selectedCategory
+        ? `${selectedCategory.fullPath} 하위 카테고리를 불러오는 중입니다.`
+        : "선택된 카테고리가 없어 1분류 전체 카테고리를 불러오는 중입니다.",
+      settingsPills
+    });
+
+    const queue = selectedCategory
+      ? await buildTrendAutoCollectionQueue(selectedCategory, (cid) => fetchTrendCategoriesForAutoQueue(apiBaseUrl, cid))
+      : await buildTrendAutoCollectionQueueForRoots(rootCategories, (cid) => fetchTrendCategoriesForAutoQueue(apiBaseUrl, cid));
+
+    if (!queue.length) {
+      setSubmitting(false);
+      setError("자동 순회할 카테고리를 찾지 못했습니다.");
+      setAutoCollection((current) => ({
+        ...current,
+        status: "failed",
+        message: "자동 순회할 카테고리를 찾지 못했습니다."
+      }));
+      return;
+    }
+
+    setSubmitting(false);
+    setAutoCollection((current) => ({
+      ...current,
+      status: "running",
+      queue,
+      currentIndex: 0,
+      message: `${queue.length}개 카테고리를 순서대로 취합합니다.`
+    }));
+    setFeedback({
+      tone: "info",
+      text: `${queue.length}개 카테고리 자동 순회를 시작했습니다. 완료된 트렌드 분석 후보를 누적하고 전체 순위를 재정렬합니다.`
+    });
+
+    const summary = await runTrendAutoCollectionQueue({
+      categories: queue,
+      settings,
+      stopOnFirstFailure: true,
+      maxAttemptsPerCategory: AUTO_COLLECTION_API_RETRY_ATTEMPTS,
+      retryDelayMs: AUTO_COLLECTION_API_RETRY_DELAY_MS,
+      shouldRetryCollectFailure: (failure) => isRetryableApiResponse(failure),
+      shouldStop: () => autoStopRequestedRef.current,
+      buildName: (category) => buildAnalysisRequestName(category.fullPath, settings),
+      onRetry: async ({ category, index, attempt, maxAttempts, message }) => {
+        setAutoCollection((current) => ({
+          ...current,
+          status: autoStopRequestedRef.current ? "stopping" : "running",
+          currentIndex: index,
+          activeRunId: null,
+          message: `${index + 1}/${queue.length} ${category.fullPath} API 재연결 대기 중 (${attempt}/${maxAttempts})${message ? ` · ${message}` : ""}`
+        }));
+      },
+      collect: async (payload, category, index) => {
+        setAutoCollection((current) => ({
+          ...current,
+          status: autoStopRequestedRef.current ? "stopping" : "running",
+          currentIndex: index,
+          activeRunId: null,
+          message: `${index + 1}/${queue.length} ${category.fullPath} 시작 중`
+        }));
+
+        const response = await startTrendCollectionRequest(apiBaseUrl, payload);
+
+        if (!response.ok) {
+          return {
+            ok: false as const,
+            code: response.code,
+            message: response.message ?? "카테고리 취합 시작에 실패했습니다."
+          };
+        }
+
+        autoExitCancelSentRef.current = false;
+        autoActiveRunIdRef.current = response.run.id;
+        void sendTrendRunHeartbeat(apiBaseUrl, response.run.id);
+        setCurrentRun(response.run);
+        setTrendBoard((previous) => upsertRunOnBoard(previous, response.run));
+
+        if (autoStopRequestedRef.current) {
+          const cancelResponse = await api<TrendRunActionResponse>(apiBaseUrl, `/trends/runs/${response.run.id}/cancel`, {
+            method: "POST"
+          });
+          const cancelledRun = cancelResponse.ok && cancelResponse.run ? cancelResponse.run : { ...response.run, status: "cancelled" as const };
+
+          autoActiveRunIdRef.current = null;
+          setCurrentRun(cancelledRun);
+          setTrendBoard((previous) => upsertRunOnBoard(previous, cancelledRun));
+          setAutoCollection((current) => ({
+            ...current,
+            status: "stopping",
+            activeRunId: null,
+            message: `${index + 1}/${queue.length} ${category.fullPath} 중지 요청됨`
+          }));
+
+          return {
+            ok: true as const,
+            run: {
+              id: cancelledRun.id,
+              status: cancelledRun.status
+            }
+          };
+        }
+
+        setAutoCollection((current) => ({
+          ...current,
+          activeRunId: response.run.id,
+          message: `${index + 1}/${queue.length} ${category.fullPath} 취합 중`
+        }));
+
+        return {
+          ok: true as const,
+          run: response.run
+        };
+      },
+      waitForRun: async (run, category, index) => {
+        const finalRun = await waitForTrendRunToSettle(apiBaseUrl, run.id, ({ attempt, maxAttempts, message }) => {
+          setAutoCollection((current) => ({
+            ...current,
+            status: autoStopRequestedRef.current ? "stopping" : "running",
+            activeRunId: run.id,
+            currentIndex: index,
+            message: `${index + 1}/${queue.length} ${category.fullPath} API 재연결 대기 중 (${attempt}/${maxAttempts})${message ? ` · ${message}` : ""}`
+          }));
+        });
+        autoActiveRunIdRef.current = finalRun.status === "queued" || finalRun.status === "running" ? finalRun.id : null;
+        return finalRun;
+      },
+      onResult: async (_result, partialSummary) => {
+        setAutoCollection((current) => ({
+          ...current,
+          completedCount: partialSummary.completedCount,
+          failedCount: partialSummary.failedCount,
+          cancelledCount: partialSummary.cancelledCount,
+          activeRunId: null,
+          message:
+            _result.status === "failed"
+              ? `${_result.category.fullPath} 취합 실패: ${_result.message ?? "API 요청 실패"}`
+              : `${partialSummary.completedCount + partialSummary.failedCount + partialSummary.cancelledCount}/${partialSummary.totalCount} 처리됨`
+        }));
+
+        if (_result.status !== "completed" || autoStopRequestedRef.current) {
+          return;
+        }
+
+        const handledCount = partialSummary.completedCount + partialSummary.failedCount + partialSummary.cancelledCount;
+        const bestProductResponse = await retryApiOperation(
+          () => collectBestProductsForCategory(apiBaseUrl, _result.category, settings, _result.run?.id),
+          {
+            maxAttempts: AUTO_COLLECTION_API_RETRY_ATTEMPTS,
+            delayMs: AUTO_COLLECTION_API_RETRY_DELAY_MS,
+            shouldStop: () => autoStopRequestedRef.current,
+            onRetry: async ({ attempt, maxAttempts, response }) => {
+              setAutoCollection((current) => ({
+                ...current,
+                message: `${handledCount}/${partialSummary.totalCount} 처리됨 · ${_result.category.name} 분석 후보 누적 API 재연결 대기 중 (${attempt}/${maxAttempts})${response.message ? ` · ${response.message}` : ""}`
+              }));
+            }
+          }
+        );
+
+        setAutoCollection((current) => ({
+          ...current,
+          message: bestProductResponse.ok
+            ? bestProductResponse.collectionStatus === "collected"
+              ? `${handledCount}/${partialSummary.totalCount} 처리됨 · ${_result.category.name} 트렌드 분석 후보 ${(bestProductResponse.items ?? []).length}개 누적, 전체 순위 갱신`
+              : `${handledCount}/${partialSummary.totalCount} 처리됨 · ${_result.category.name} 분석 후보 누적 ${bestProductResponse.collectionStatus === "empty" ? "빈 결과" : "실패"}: ${bestProductResponse.message ?? "원인 확인 필요"}`
+            : `${handledCount}/${partialSummary.totalCount} 처리됨 · ${_result.category.name} 분석 후보 누적 API 실패: ${bestProductResponse.message ?? "API 연결 실패"}`
+        }));
+      }
+    });
+
+    autoActiveRunIdRef.current = null;
+    const finalStatus =
+      summary.failedCount > 0
+        ? "failed"
+        : summary.status === "completed"
+          ? "completed"
+          : "stopped";
+    setAutoCollection((current) => ({
+      ...current,
+      status: finalStatus,
+      completedCount: summary.completedCount,
+      failedCount: summary.failedCount,
+      cancelledCount: summary.cancelledCount,
+      activeRunId: null,
+      message:
+        finalStatus === "completed"
+          ? `${summary.totalCount}개 카테고리 자동 순회를 완료했습니다.`
+          : finalStatus === "failed"
+            ? `자동 순회가 중단되었습니다. ${summary.failedCount}개 카테고리에서 취합 실패가 발생했습니다. API 연결과 로그를 확인해 주세요.`
+          : `자동 순회를 중지했습니다. ${summary.results.length}/${summary.totalCount}개 카테고리를 처리했습니다.`
+    }));
+    setFeedback({
+      tone: finalStatus === "completed" ? "success" : finalStatus === "failed" ? "error" : "info",
+      text:
+        finalStatus === "completed"
+          ? "자동 카테고리 순회가 완료되었습니다."
+          : finalStatus === "failed"
+            ? "자동 카테고리 순회가 API 오류로 중단되었습니다. 로컬 API가 켜져 있는지 확인해 주세요."
+          : "자동 카테고리 순회를 중지했습니다."
+    });
+
+    void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
+  }
+
+  async function handleStopAutoCollection() {
+    autoStopRequestedRef.current = true;
+    setAutoCollection((current) => ({
+      ...current,
+      status: current.status === "idle" ? "idle" : "stopping",
+      message: "자동 순회를 중지하는 중입니다. 현재 런을 취소하고 다음 카테고리는 시작하지 않습니다."
+    }));
+
+    const stopResult = await stopTrendAutoCollectionRun(autoActiveRunIdRef.current, async (runId) => {
+      await api<TrendRunActionResponse>(apiBaseUrl, `/trends/runs/${runId}/cancel`, {
+        method: "POST"
+      });
+    });
+
+    if (stopResult.cancelRequested) {
+      autoActiveRunIdRef.current = null;
+      setAutoCollection((current) => ({
+        ...current,
+        activeRunId: null,
+        message: "현재 런 취소를 요청했습니다. 다음 카테고리는 시작하지 않습니다."
+      }));
+      void refreshBoard(apiBaseUrl, setTrendBoard, setCurrentRun, setRefreshing, setError);
+    }
   }
 
   async function handleConfirmAction() {
@@ -767,6 +1228,8 @@ export default function SourcingAdminPage() {
             <div className={styles.setupTabs} role="tablist" aria-label="Cloudflare 설정 메뉴">
               <button
                 type="button"
+                role="tab"
+                aria-selected={activeSetupPanel === "settings"}
                 className={activeSetupPanel === "settings" ? `${styles.setupTab} ${styles.setupTabActive}` : styles.setupTab}
                 onClick={() => setActiveSetupPanel(activeSetupPanel === "settings" ? null : "settings")}
               >
@@ -775,6 +1238,8 @@ export default function SourcingAdminPage() {
               </button>
               <button
                 type="button"
+                role="tab"
+                aria-selected={activeSetupPanel === "guide"}
                 className={activeSetupPanel === "guide" ? `${styles.setupTab} ${styles.setupTabActive}` : styles.setupTab}
                 onClick={() => setActiveSetupPanel(activeSetupPanel === "guide" ? null : "guide")}
               >
@@ -857,7 +1322,7 @@ export default function SourcingAdminPage() {
         </section>
 
         {error ? (
-          <div className={`${styles.banner} ${styles.bannerError}`}>
+          <div className={`${styles.banner} ${styles.bannerError}`} role="alert">
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>
@@ -951,6 +1416,7 @@ export default function SourcingAdminPage() {
                       type="button"
                       className={form.resultCount === option ? `${styles.segmentedButton} ${styles.segmentedButtonActive}` : styles.segmentedButton}
                       onClick={() => setForm((current) => ({ ...current, resultCount: option }))}
+                      aria-pressed={form.resultCount === option}
                     >
                       Top {option}
                     </button>
@@ -992,12 +1458,14 @@ export default function SourcingAdminPage() {
                   <input
                     type="checkbox"
                     checked={form.excludeBrandProducts}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const excludeBrandProducts = event.target.checked;
                       setForm((current) => ({
                         ...current,
-                        excludeBrandProducts: event.target.checked
-                      }))
-                    }
+                        excludeBrandProducts,
+                        customExcludedTerms: excludeBrandProducts ? current.customExcludedTerms : ""
+                      }));
+                    }}
                   />
                   <div>
                     <span className={styles.checkboxTitle}>브랜드 제품 제외</span>
@@ -1034,8 +1502,67 @@ export default function SourcingAdminPage() {
                 />
               </div>
 
+              <div className={styles.autoPanel} data-testid="auto-collection-panel">
+                <div className={styles.autoPanelHeader}>
+                  <div>
+                    <span className={styles.optionTitle}>자동 카테고리 순회</span>
+                    <p className={styles.optionHint}>
+                      {autoCollection.rootPath ?? selectedCategory?.fullPath ?? "카테고리 선택 대기"}
+                    </p>
+                  </div>
+                  <span className={`${styles.badge} ${autoCollectionActive ? styles.badgeProgress : styles.badgeStable}`}>
+                    {autoCollectionStatusLabel(autoCollection.status)}
+                  </span>
+                </div>
+                <p className={styles.visuallyHidden} id="auto-collection-status" role="status" aria-atomic="true" data-testid="auto-collection-status">
+                  {autoCollection.message}
+                </p>
+                <div
+                  className={styles.visuallyHidden}
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={Math.max(autoCollectionTotal, 1)}
+                  aria-valuenow={autoCollectionHandled}
+                  aria-valuetext={`${autoCollectionHandled}/${autoCollectionTotal} 처리됨${autoCollectionCurrentCategory ? `, 현재 ${autoCollectionCurrentCategory.fullPath}` : ""}`}
+                  data-testid="auto-collection-progress"
+                />
+                <div className={styles.progressGrid}>
+                  <ProgressStat
+                    label="자동 진행"
+                    value={autoCollectionTotal ? `${autoCollectionHandled}/${autoCollectionTotal}` : "0/0"}
+                    hint={autoCollectionCurrentCategory?.name ?? "대기"}
+                  />
+                  <ProgressStat
+                    label="완료"
+                    value={`${autoCollection.completedCount}건`}
+                    hint="완료된 카테고리"
+                  />
+                  <ProgressStat
+                    label="실패/중지"
+                    value={`${autoCollection.failedCount + autoCollection.cancelledCount}건`}
+                    hint="실패 또는 취소"
+                  />
+                </div>
+                <p className={styles.inlineHelper}>{autoCollection.message}</p>
+                <p className={styles.inlineHelper}>
+                  분석누적: {bestProductStatus.message} · 엑셀 {bestProductStatus.outputFileName}
+                </p>
+                <div className={styles.pillRow}>
+                  {(autoCollection.settingsPills.length ? autoCollection.settingsPills : formatFormSettingPills(form)).map((label) => (
+                    <span key={`auto-${label}`} className={styles.summaryPill}>
+                      {label}
+                    </span>
+                  ))}
+                  <span className={styles.summaryPill}>
+                    {bestProductStatus.ready ? "트렌드 분석 누적 준비됨" : "트렌드 분석 누적 확인 중"}
+                  </span>
+                </div>
+              </div>
+
               {feedback ? (
                 <div
+                  role={feedback.tone === "error" ? "alert" : "status"}
+                  aria-live={feedback.tone === "error" ? "assertive" : "polite"}
                   className={
                     feedback.tone === "success"
                       ? `${styles.banner} ${styles.bannerSuccess}`
@@ -1049,24 +1576,53 @@ export default function SourcingAdminPage() {
                 </div>
               ) : null}
 
-              <button className={styles.primaryButton} type="button" onClick={() => void handleStartAnalysis()} disabled={submitting || !apiConfigured}>
-                {submitting ? (
-                  <>
-                    <LoaderCircle className={styles.spinningIcon} size={16} />
-                    분석 준비 중...
-                  </>
-                ) : !apiConfigured ? (
-                  <>
-                    <Cloud size={16} />
-                    API 설정 필요
-                  </>
-                ) : (
-                  <>
-                    <Search size={16} />
-                    분석 시작
-                  </>
-                )}
-              </button>
+              <div className={styles.actionRow}>
+                <button
+                  className={styles.primaryButton}
+                  type="button"
+                  onClick={() => void handleStartAnalysis()}
+                  disabled={submitting || autoCollectionActive || !apiConfigured}
+                >
+                  {submitting && !autoCollectionActive ? (
+                    <>
+                      <LoaderCircle className={styles.spinningIcon} size={16} />
+                      분석 준비 중...
+                    </>
+                  ) : !apiConfigured ? (
+                    <>
+                      <Cloud size={16} />
+                      API 설정 필요
+                    </>
+                  ) : (
+                    <>
+                      <Search size={16} />
+                      분석 시작
+                    </>
+                  )}
+                </button>
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => void handleStartAutoCollection()}
+                  disabled={submitting || autoCollectionActive || !apiConfigured}
+                  data-testid="auto-collection-start"
+                  aria-describedby="auto-collection-status"
+                >
+                  {autoCollection.status === "preparing" ? <LoaderCircle className={styles.spinningIcon} size={16} /> : <PlayCircle size={16} />}
+                  자동 시작
+                </button>
+                <button
+                  className={`${styles.secondaryButton} ${styles.warningButton}`}
+                  type="button"
+                  onClick={() => void handleStopAutoCollection()}
+                  disabled={!autoCollectionActive}
+                  data-testid="auto-collection-stop"
+                  aria-describedby="auto-collection-status"
+                >
+                  {autoCollection.status === "stopping" ? <LoaderCircle className={styles.spinningIcon} size={16} /> : <PauseCircle size={16} />}
+                  자동 종료
+                </button>
+              </div>
 
               <div className={styles.resultArchive}>
                 <div className={styles.resultArchiveHeader}>
@@ -1093,8 +1649,9 @@ export default function SourcingAdminPage() {
                           </span>
                         </div>
                         <div className={styles.resultArchiveDetail}>
-                          <span>Top {run.profile.resultCount}</span>
-                          <span>{run.profile.excludeBrandProducts ? "브랜드 제외" : "원본 키워드"}</span>
+                          {formatProfileSettingPills(run.profile).map((label) => (
+                            <span key={`${run.id}-${label}`}>{label}</span>
+                          ))}
                           <span>{formatDateTime(run.updatedAt)}</span>
                         </div>
                       </button>
@@ -1200,17 +1757,18 @@ export default function SourcingAdminPage() {
                         : "현재는 조건 입력 전입니다. 카테고리와 필터를 정한 뒤 분석을 시작해 주세요."}
                     </p>
                     <div className={styles.pillRow}>
-                      <span className={styles.summaryPill}>수집 기준 {visibleRun?.profile.resultCount ?? form.resultCount}개</span>
                       <span className={styles.summaryPill}>기준 기간 {summaryPeriodLabel}</span>
+                      {(visibleRun ? formatProfileSettingPills(visibleRun.profile) : formatFormSettingPills(form)).map((label) => (
+                        <span key={label} className={styles.summaryPill}>
+                          {label}
+                        </span>
+                      ))}
                       {visibleRun ? (
                         <>
                           <span className={styles.summaryPill}>{processingModeLabel(visibleRun.processingMode)}</span>
                           <span className={styles.summaryPill}>캐시 {visibleRun.cacheCompletedTasks ?? 0}개월</span>
                           <span className={styles.summaryPill}>네이버 {visibleRun.naverCompletedTasks ?? 0}개월</span>
                         </>
-                      ) : null}
-                      {visibleRun?.profile.excludeBrandProducts || form.excludeBrandProducts ? (
-                        <span className={styles.summaryPill}>브랜드 제품 제외 적용</span>
                       ) : null}
                     </div>
                   </div>
@@ -1287,6 +1845,7 @@ export default function SourcingAdminPage() {
                           type="button"
                           className={heatmapMode === "season" ? `${styles.segmentedButton} ${styles.segmentedButtonActive}` : styles.segmentedButton}
                           onClick={() => setHeatmapMode("season")}
+                          aria-pressed={heatmapMode === "season"}
                         >
                           계절 요약
                         </button>
@@ -1294,6 +1853,7 @@ export default function SourcingAdminPage() {
                           type="button"
                           className={heatmapMode === "timeline" ? `${styles.segmentedButton} ${styles.segmentedButtonActive}` : styles.segmentedButton}
                           onClick={() => setHeatmapMode("timeline")}
+                          aria-pressed={heatmapMode === "timeline"}
                         >
                           63개월 보기
                         </button>
@@ -1589,6 +2149,7 @@ function FilterGroup<T extends string>({
             type="button"
             className={values.includes(value) ? `${styles.chipButton} ${styles.chipButtonActive}` : styles.chipButton}
             onClick={() => onToggle(value)}
+            aria-pressed={values.includes(value)}
           >
             {label}
           </button>
@@ -2223,6 +2784,194 @@ async function refreshBoard(
   });
 }
 
+async function startTrendCollectionRequest(apiBaseUrl: string, payload: TrendProfileInput) {
+  return api<TrendCollectResponse>(apiBaseUrl, "/trends/collect", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      forceRefresh: true
+    })
+  });
+}
+
+async function collectBestProductsForCategory(
+  apiBaseUrl: string,
+  category: TrendCategoryNode,
+  settings: TrendCollectionSettingsSnapshot,
+  runId?: string
+) {
+  return api<BestProductCollectResponse>(apiBaseUrl, "/products/best/collect", {
+    method: "POST",
+    body: JSON.stringify({
+      categoryCid: category.cid,
+      categoryPath: category.fullPath,
+      categoryName: category.name,
+      runId,
+      limit: Math.min(20, Math.max(10, settings.resultCount)),
+      excludeBrandProducts: settings.excludeBrandProducts,
+      customExcludedTerms: settings.customExcludedTerms
+    })
+  });
+}
+
+async function refreshBestProductStatus(
+  apiBaseUrl: string,
+  setBestProductStatus: Dispatch<SetStateAction<BestProductStatusState>>
+) {
+  const response = await api<BestProductStatusResponse>(apiBaseUrl, "/products/best/status");
+
+  if (!response.ok) {
+    setBestProductStatus({
+      ...initialBestProductStatus,
+      credentialStatus: "unknown",
+      message: response.message ?? "분석 누적 상태 확인 실패"
+    });
+    return;
+  }
+
+  setBestProductStatus({
+    ready: response.ready,
+    credentialStatus: response.credentialStatus,
+    outputFileName: response.outputFileName,
+    message: response.ready ? "트렌드 분석 누적 준비됨, 완료된 분석 후보 누적 가능" : "트렌드 분석 누적 준비 확인 중"
+  });
+}
+
+async function retryApiOperation<T extends { ok: boolean; code?: string; message?: string }>(
+  operation: () => Promise<T>,
+  options: {
+    maxAttempts: number;
+    delayMs: number;
+    shouldStop?: () => boolean;
+    onRetry?: (event: { attempt: number; maxAttempts: number; nextDelayMs: number; response: T }) => void | Promise<void>;
+  }
+) {
+  const maxAttempts = Math.max(1, options.maxAttempts);
+  const delayMs = Math.max(0, options.delayMs);
+  let latestResponse: T | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    latestResponse = await operation();
+
+    if (latestResponse.ok || !isRetryableApiResponse(latestResponse) || attempt >= maxAttempts || options.shouldStop?.()) {
+      return latestResponse;
+    }
+
+    await options.onRetry?.({
+      attempt,
+      maxAttempts,
+      nextDelayMs: delayMs,
+      response: latestResponse
+    });
+
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+
+  return latestResponse!;
+}
+
+function isRetryableApiResponse(response: { ok: boolean; code?: string }) {
+  if (response.ok) {
+    return false;
+  }
+
+  return (
+    response.code === "NETWORK_ERROR" ||
+    response.code === "HTTP_408" ||
+    response.code === "HTTP_429" ||
+    response.code === "HTTP_500" ||
+    response.code === "HTTP_502" ||
+    response.code === "HTTP_503" ||
+    response.code === "HTTP_504"
+  );
+}
+
+async function sendTrendRunHeartbeat(apiBaseUrl: string, runId: string) {
+  return api<TrendRunActionResponse>(apiBaseUrl, `/trends/runs/${runId}/heartbeat`, {
+    method: "POST"
+  });
+}
+
+async function waitForTrendRunToSettle(
+  apiBaseUrl: string,
+  runId: string,
+  onTransientApiFailure?: (event: { attempt: number; maxAttempts: number; message?: string }) => void | Promise<void>
+): Promise<TrendRunSettleResult> {
+  let latestRun: TrendRunDetail | null = null;
+  let transientApiFailures = 0;
+
+  while (true) {
+    await sleep(AUTO_COLLECTION_POLL_MS);
+    const heartbeatResponse = await sendTrendRunHeartbeat(apiBaseUrl, runId);
+
+    if (!heartbeatResponse.ok) {
+      if (isRetryableApiResponse(heartbeatResponse) && transientApiFailures < AUTO_COLLECTION_API_RETRY_ATTEMPTS) {
+        transientApiFailures += 1;
+        await onTransientApiFailure?.({
+          attempt: transientApiFailures,
+          maxAttempts: AUTO_COLLECTION_API_RETRY_ATTEMPTS,
+          message: heartbeatResponse.message
+        });
+        await sleep(AUTO_COLLECTION_API_RETRY_DELAY_MS);
+        continue;
+      }
+
+      return {
+        id: runId,
+        status: "failed" as const
+      };
+    }
+
+    const response = await api<TrendRunResponse>(apiBaseUrl, `/trends/runs/${runId}`);
+
+    if (!response.ok) {
+      if (isRetryableApiResponse(response) && transientApiFailures < AUTO_COLLECTION_API_RETRY_ATTEMPTS) {
+        transientApiFailures += 1;
+        await onTransientApiFailure?.({
+          attempt: transientApiFailures,
+          maxAttempts: AUTO_COLLECTION_API_RETRY_ATTEMPTS,
+          message: response.message
+        });
+        await sleep(AUTO_COLLECTION_API_RETRY_DELAY_MS);
+        continue;
+      }
+
+      return {
+        id: runId,
+        status: "failed" as const
+      };
+    }
+
+    transientApiFailures = 0;
+    latestRun = response.run;
+
+    if (latestRun.status !== "queued" && latestRun.status !== "running") {
+      return latestRun;
+    }
+  }
+}
+
+function isTrendRunDetail(run: TrendRunSettleResult): run is TrendRunDetail {
+  return "profile" in run && "tasks" in run;
+}
+
+function upsertRunOnBoard(previous: TrendAdminBoard | null, run: TrendRunDetail): TrendAdminBoard {
+  return previous
+    ? {
+        ...previous,
+        generatedAt: new Date().toISOString(),
+        runs: [run, ...previous.runs.filter((item) => item.id !== run.id)].slice(0, 8)
+      }
+    : {
+        generatedAt: new Date().toISOString(),
+        metrics: [],
+        profiles: [],
+        runs: [run]
+      };
+}
+
 async function fetchTrendCategories(apiBaseUrl: string, cid: string) {
   if (!apiBaseUrl) {
     return cid === "0" ? STATIC_TREND_ROOT_CATEGORIES : getStaticTrendCategoryChildren(Number(cid));
@@ -2235,6 +2984,10 @@ async function fetchTrendCategories(apiBaseUrl: string, cid: string) {
   }
 
   return cid === "0" ? STATIC_TREND_ROOT_CATEGORIES : getStaticTrendCategoryChildren(Number(cid));
+}
+
+async function fetchTrendCategoriesForAutoQueue(_apiBaseUrl: string, cid: number) {
+  return getStaticTrendCategoryChildren(cid);
 }
 
 async function loadSnapshots(
@@ -2295,7 +3048,10 @@ function toggleValue<T extends string>(values: T[], target: T) {
   return values.includes(target) ? values.filter((value) => value !== target) : [...values, target];
 }
 
-function buildAnalysisRequestName(categoryPath: string, form: TrendFormState) {
+function buildAnalysisRequestName(
+  categoryPath: string,
+  form: Pick<TrendFormState, "devices" | "genders" | "ages" | "resultCount" | "excludeBrandProducts">
+) {
   const parts = [categoryPath];
   const deviceLabel = formatSelection(form.devices, DEVICE_OPTIONS, "");
   const genderLabel = formatSelection(form.genders, GENDER_OPTIONS, "");
@@ -2321,11 +3077,58 @@ function buildAnalysisRequestName(categoryPath: string, form: TrendFormState) {
   return parts.join(" · ");
 }
 
-function splitExcludedTerms(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+function formatProfileSettingPills(profile: TrendRunDetail["profile"]) {
+  const labels = [
+    `CID ${profile.categoryCid}`,
+    `Top ${profile.resultCount}`,
+    `기기 ${formatSelection(profile.devices, DEVICE_OPTIONS, "전체")}`,
+    `성별 ${formatSelection(profile.genders, GENDER_OPTIONS, "전체")}`,
+    `연령 ${formatSelection(profile.ages, AGE_OPTIONS, "전체")}`,
+    profile.excludeBrandProducts ? "브랜드 제외" : "원본 키워드"
+  ];
+
+  if (profile.excludeBrandProducts && profile.customExcludedTerms.length) {
+    labels.push(`제외어 ${profile.customExcludedTerms.join(", ")}`);
+  }
+
+  return labels;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function formatFormSettingPills(form: TrendFormState) {
+  const labels = [
+    `Top ${form.resultCount}`,
+    `기기 ${formatSelection(form.devices, DEVICE_OPTIONS, "전체")}`,
+    `성별 ${formatSelection(form.genders, GENDER_OPTIONS, "전체")}`,
+    `연령 ${formatSelection(form.ages, AGE_OPTIONS, "전체")}`,
+    form.excludeBrandProducts ? "브랜드 제외" : "원본 키워드"
+  ];
+
+  const terms = normalizeTrendExcludedTermsForMode(form.excludeBrandProducts, splitTrendExcludedTermsInput(form.customExcludedTerms));
+  if (terms.length) {
+    labels.push(`제외어 ${terms.join(", ")}`);
+  }
+
+  return labels;
+}
+
+function formatSettingsSnapshotPills(settings: TrendCollectionSettingsSnapshot) {
+  const labels = [
+    `Top ${settings.resultCount}`,
+    `기기 ${formatSelection(settings.devices, DEVICE_OPTIONS, "전체")}`,
+    `성별 ${formatSelection(settings.genders, GENDER_OPTIONS, "전체")}`,
+    `연령 ${formatSelection(settings.ages, AGE_OPTIONS, "전체")}`,
+    settings.excludeBrandProducts ? "브랜드 제외" : "원본 키워드"
+  ];
+
+  if (settings.customExcludedTerms.length) {
+    labels.push(`제외어 ${settings.customExcludedTerms.join(", ")}`);
+  }
+
+  return labels;
 }
 
 function formatSelection<T extends string>(values: readonly T[], options: readonly (readonly [T, string])[], fallback: string) {
@@ -2351,6 +3154,25 @@ function runStatusLabel(status: TrendRunDetail["status"]) {
       return "실패";
     default:
       return status;
+  }
+}
+
+function autoCollectionStatusLabel(status: AutoCollectionState["status"]) {
+  switch (status) {
+    case "preparing":
+      return "준비";
+    case "running":
+      return "순회 중";
+    case "stopping":
+      return "종료 중";
+    case "stopped":
+      return "중지됨";
+    case "completed":
+      return "완료";
+    case "failed":
+      return "실패";
+    default:
+      return "대기";
   }
 }
 
@@ -2675,6 +3497,16 @@ function mergeRunDetail(previous: TrendRunDetail, next: TrendRunDetail) {
     analysisSummary: previous.analysisSummary ?? next.analysisSummary,
     analysisCards: previous.analysisCards.length ? previous.analysisCards : next.analysisCards
   };
+}
+
+function pickDefaultVisibleRun(runs: TrendRunDetail[]) {
+  return (
+    runs.find((run) => run.status === "running" || run.status === "queued") ??
+    runs.find((run) => run.status === "completed" && run.analysisReady) ??
+    runs.find((run) => run.status === "completed") ??
+    runs[0] ??
+    null
+  );
 }
 
 function getInitialApiBaseUrl() {

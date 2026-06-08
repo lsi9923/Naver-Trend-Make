@@ -1,0 +1,241 @@
+{
+  "allPass": true,
+  "checkedAt": "2026-06-07T19:39:23.998Z",
+  "scenario": "real-playwright-page-close-cancels-active-run",
+  "staticUrl": "http://127.0.0.1:32130/sourcing/admin.html?qa=playwright-close",
+  "apiBase": "http://127.0.0.1:32131/v1",
+  "beforeClose": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": [],
+    "heartbeatRequests": [
+      "run-1-50021279",
+      "run-1-50021279"
+    ],
+    "browserRequests": [
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/sourcing/admin.html?qa=playwright-close"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/css/a3f650c988b2d306.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/css/e1807a4a0f40e94d.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/webpack-2fe968fa3e640929.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/9409b4b9-65db0d220a46de34.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/200-5a829d0d4b045e16.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/main-app-6e89b2e46ed2b7fe.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/438-70b3eb038f79e6f2.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/app/sourcing/admin/page-439c44a000dbd6b1.js"
+      },
+      {
+        "method": "GET",
+        "url": "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/admin/board"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/0"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000000"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000000"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000167"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021279"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000805"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000169"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021559"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021639"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/collect"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/runs/run-1-50021279/heartbeat"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/runs/run-1-50021279/heartbeat"
+      }
+    ]
+  },
+  "afterClose": {
+    "collectRequests": [
+      {
+        "name": "패션의류 > 여성의류 > 니트 · Top20",
+        "categoryCid": 50021279,
+        "categoryPath": "패션의류 > 여성의류 > 니트",
+        "timeUnit": "month",
+        "devices": [],
+        "genders": [],
+        "ages": [],
+        "spreadsheetId": "",
+        "resultCount": 20,
+        "excludeBrandProducts": false,
+        "customExcludedTerms": []
+      }
+    ],
+    "cancelRequests": [
+      "run-1-50021279"
+    ],
+    "heartbeatRequests": [
+      "run-1-50021279",
+      "run-1-50021279"
+    ],
+    "browserRequests": [
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/sourcing/admin.html?qa=playwright-close"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/css/a3f650c988b2d306.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/css/e1807a4a0f40e94d.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/webpack-2fe968fa3e640929.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/9409b4b9-65db0d220a46de34.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/200-5a829d0d4b045e16.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/main-app-6e89b2e46ed2b7fe.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/438-70b3eb038f79e6f2.js"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32130/_next/static/chunks/app/sourcing/admin/page-439c44a000dbd6b1.js"
+      },
+      {
+        "method": "GET",
+        "url": "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/admin/board"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/0"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000000"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000000"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000167"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021279"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000805"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50000169"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021559"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:32131/v1/trends/categories/50021639"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/collect"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/runs/run-1-50021279/heartbeat"
+      },
+      {
+        "method": "POST",
+        "url": "http://127.0.0.1:32131/v1/trends/runs/run-1-50021279/heartbeat"
+      }
+    ]
+  }
+}

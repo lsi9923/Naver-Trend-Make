@@ -1,0 +1,70 @@
+{
+  "collectCount": 2,
+  "firstCollect": {
+    "name": "패션의류 > 여성의류 > 니트 · PC · 여성 · 20대 · Top40 · 브랜드 제외",
+    "categoryCid": 50021279,
+    "categoryPath": "패션의류 > 여성의류 > 니트",
+    "categoryDepth": 3,
+    "timeUnit": "month",
+    "devices": [
+      "pc"
+    ],
+    "genders": [
+      "f"
+    ],
+    "ages": [
+      "20"
+    ],
+    "spreadsheetId": "",
+    "resultCount": 40,
+    "excludeBrandProducts": true,
+    "customExcludedTerms": [
+      "nike",
+      "adidas"
+    ]
+  },
+  "secondCollect": {
+    "name": "패션의류 > 여성의류 > 니트 · 모바일 · 남성 · 30대 · Top20",
+    "categoryCid": 50021279,
+    "categoryPath": "패션의류 > 여성의류 > 니트",
+    "categoryDepth": 3,
+    "timeUnit": "month",
+    "devices": [
+      "mo"
+    ],
+    "genders": [
+      "m"
+    ],
+    "ages": [
+      "30"
+    ],
+    "spreadsheetId": "",
+    "resultCount": 20,
+    "excludeBrandProducts": false,
+    "customExcludedTerms": []
+  },
+  "termInputCountAfterOff": 0,
+  "requestChecks": {
+    "firstHasExcludedTerms": true,
+    "secondClearedExcludedTerms": true,
+    "secondOriginalMode": true
+  },
+  "currentProgressChecks": {
+    "hasCid": true,
+    "hasTop20": true,
+    "hasMobile": true,
+    "hasMale": true,
+    "hasAge30": true,
+    "hasOriginalKeyword": true,
+    "hasHiddenExcludedTerms": false
+  },
+  "archiveChecks": {
+    "hasCid": true,
+    "hasTop40": true,
+    "hasTop20": true,
+    "hasFilterLabels": true,
+    "hasExcludedTermsForBrandRun": true
+  },
+  "currentProgressText": "실시간 진행 상태패션의류 > 여성의류 > 니트데이터 취합이 끝나 장기 세일즈 트렌드 분석을 보여주고 있습니다.기준 기간 2021-01 ~ 2026-05CID 50021279Top 20기기 모바일성별 남성연령 30대원본 키워드수집 완료캐시 0개월네이버 0개월현재 처리 중 월2026-05최근 완료 월 기준완료 월 수65/65완료/전체현재 페이지1/1월 내부 진행남은 예상시간완료초기 추정치예상 완료 시각-실시간 ETA최근 완료 월2026-05취합 완료처리 방식수집 완료추가 수집 없음",
+  "archiveText": "ARCHIVE작업 결과 보기2건패션의류 > 여성의류 > 니트2021-01 ~ 2026-05CID 50021279Top 20기기 모바일성별 남성연령 30대원본 키워드06. 08. 오전 02:07패션의류 > 여성의류 > 니트2021-01 ~ 2026-05CID 50021279Top 40기기 PC성별 여성연령 20대브랜드 제외제외어 nike, adidas06. 08. 오전 02:07"
+}

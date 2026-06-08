@@ -1,0 +1,4 @@
+
+> @runacademy/shared@0.1.0 build C:\Users\imda0\Desktop\커서 ai 폴더\naver-trend-maker-10\shared
+> tsc -p tsconfig.json
+

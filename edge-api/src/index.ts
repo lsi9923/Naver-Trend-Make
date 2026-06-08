@@ -8,7 +8,7 @@ import {
   getTrendTotalPages,
   getLatestCollectibleTrendPeriod,
   listMonthlyPeriods,
-  normalizeExcludedTerms,
+  normalizeTrendExcludedTermsForMode,
   normalizeTrendResultCount,
   normalizeTrendSpreadsheetId,
   serializeTrendFilter,
@@ -19,6 +19,7 @@ import {
   type TrendCollectionTaskSource,
   type TrendDeviceCode,
   type TrendGenderCode,
+  type TrendAnalysisKeyword,
   type TrendKeywordSnapshot,
   type TrendProfile,
   type TrendProfileInput,
@@ -60,6 +61,52 @@ interface NaverKeywordRankPage {
   ranks: NaverKeywordRankItem[];
 }
 
+interface BestProductCollectInput {
+  categoryCid: number;
+  categoryPath: string;
+  categoryName?: string;
+  runId?: string;
+  query?: string;
+  limit?: number;
+  excludeBrandProducts?: boolean;
+  customExcludedTerms?: string[];
+}
+
+interface BestProductExportItem {
+  globalRank: number;
+  bestScore: number;
+  collectedAt: string;
+  status: "collected" | "failed" | "empty";
+  categoryPath: string;
+  categoryName: string;
+  query: string;
+  trendPeriod: string;
+  trendKeyword: string;
+  trendRank: number;
+  keywordScore: number;
+  keywordAppearanceCount: number;
+  rank: number;
+  analysisCardKind: string;
+  analysisCard: string;
+  analysisRationale: string;
+  latestScore: number;
+  delta: number;
+  momentum: number;
+  seasonalIndex: number;
+  recommendedMonths: string[];
+  cautionMonths: string[];
+  title: string;
+  link: string;
+  image: string;
+  lowPrice: number | null;
+  mallName: string;
+  brand: string;
+  maker: string;
+  productId: string;
+  source: string;
+  failureReason: string;
+}
+
 interface ApiError {
   ok: false;
   code: string;
@@ -70,6 +117,9 @@ const NAVER_BASE_URL = "https://datalab.naver.com";
 const NAVER_CATEGORY_PAGE_URL = `${NAVER_BASE_URL}/shoppingInsight/sCategory.naver`;
 const NAVER_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+const BEST_PRODUCT_DEFAULT_LIMIT = 10;
+const BEST_PRODUCT_MAX_LIMIT = 20;
+const BEST_PRODUCT_SOURCE = "naver-shopping-insight:trend-analysis";
 const DEFAULT_OPERATOR_ID = "haniroom-trend-operator";
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -86,6 +136,7 @@ const NAVER_PAGE_DELAY_MAX_MS = 3_200;
 const NAVER_RATE_LIMIT_BASE_DELAY_MS = 8_000;
 const NAVER_TRANSIENT_BASE_DELAY_MS = 2_000;
 const STALE_RUNNING_TASK_MS = 90_000;
+const STALE_BROWSER_HEARTBEAT_MS = 20_000;
 let schemaReadyPromise: Promise<void> | null = null;
 
 type NaverSessionRef = {
@@ -113,6 +164,7 @@ export default {
       }
 
       if (request.method === "GET" && pathname === "/v1/trends/admin/board") {
+        await cancelStaleBrowserHeartbeatRuns(env.DB);
         const board = await getTrendAdminBoard(env.DB);
 
         if (await shouldKickQueuedProcessing(env.DB)) {
@@ -151,6 +203,7 @@ export default {
 
       const runMatch = pathname.match(/^\/v1\/trends\/runs\/([^/]+)$/);
       if (request.method === "GET" && runMatch) {
+        await cancelStaleBrowserHeartbeatRuns(env.DB, runMatch[1]);
         const response = await getTrendRun(env.DB, runMatch[1]);
 
         if (response.ok && (await shouldKickQueuedProcessing(env.DB, runMatch[1]))) {
@@ -165,6 +218,17 @@ export default {
         return respondJson(await cancelTrendRun(env.DB, cancelMatch[1]));
       }
 
+      const heartbeatMatch = pathname.match(/^\/v1\/trends\/runs\/([^/]+)\/heartbeat$/);
+      if (request.method === "POST" && heartbeatMatch) {
+        const response = await heartbeatTrendRun(env.DB, heartbeatMatch[1]);
+
+        if (response.ok && response.run && (response.run.status === "queued" || response.run.status === "running")) {
+          ctx.waitUntil(cancelRunIfBrowserHeartbeatStale(env.DB, heartbeatMatch[1]));
+        }
+
+        return respondJson(response);
+      }
+
       const deleteMatch = pathname.match(/^\/v1\/trends\/runs\/([^/]+)$/);
       if (request.method === "DELETE" && deleteMatch) {
         return respondJson(await deleteTrendRun(env.DB, deleteMatch[1]));
@@ -175,6 +239,19 @@ export default {
         const period = url.searchParams.get("period")?.trim() ?? "";
         const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
         return respondJson(await getTrendRunSnapshotsPage(env.DB, runSnapshotsMatch[1], period, page));
+      }
+
+      if (request.method === "POST" && pathname === "/v1/products/best/collect") {
+        const body = (await request.json()) as BestProductCollectInput;
+        return respondJson(await collectBestProductsForCategory(env, body));
+      }
+
+      if (request.method === "GET" && pathname === "/v1/products/best/status") {
+        return respondJson(getBestProductsStatus(env));
+      }
+
+      if (request.method === "GET" && pathname === "/v1/products/best/export") {
+        return respondJson(await getBestProductsExport(env.DB));
       }
 
       const retryMatch = pathname.match(/^\/v1\/trends\/runs\/([^/]+)\/retry-failures$/);
@@ -497,6 +574,7 @@ async function createTrendProfile(db: D1Database, input: TrendProfileInput) {
 
 async function startTrendCollection(db: D1Database, input: TrendProfileInput) {
   const normalizedInput = normalizeTrendProfileInput(input);
+  const forceRefresh = Boolean(normalizedInput.forceRefresh);
 
   if (normalizedInput.timeUnit !== "month") {
     return {
@@ -582,7 +660,7 @@ async function startTrendCollection(db: D1Database, input: TrendProfileInput) {
     };
   }
 
-  if (profile) {
+  if (profile && !forceRefresh) {
     const reusableRun = await findReusableCompletedRun(db, profile);
 
     if (reusableRun) {
@@ -594,7 +672,7 @@ async function startTrendCollection(db: D1Database, input: TrendProfileInput) {
     }
   }
 
-  const started = await startBackfill(db, profileId);
+  const started = await startBackfill(db, profileId, { forceRefresh });
   return started.ok
     ? {
         ...started,
@@ -782,6 +860,7 @@ async function cancelTrendRun(db: D1Database, runId: string) {
          failed_tasks = ?,
          total_snapshots = ?,
          cancelled_at = ?,
+         browser_heartbeat_at = NULL,
          completed_at = NULL,
          failure_reason = NULL,
          updated_at = ?
@@ -803,6 +882,63 @@ async function cancelTrendRun(db: D1Database, runId: string) {
     ok: true as const,
     run: await buildRunDetail(db, mapRun(refreshed!))
   };
+}
+
+async function heartbeatTrendRun(db: D1Database, runId: string) {
+  const runRow = await one<TrendCollectionRunRow>(db, "SELECT * FROM trend_runs WHERE id = ?", [runId]);
+
+  if (!runRow) {
+    return {
+      ok: false as const,
+      code: "TREND_RUN_NOT_FOUND",
+      message: "runId에 해당하는 트렌드 수집 런이 없습니다."
+    };
+  }
+
+  if (!["queued", "running"].includes(runRow.status)) {
+    return {
+      ok: true as const,
+      run: await buildRunDetail(db, mapRun(runRow))
+    };
+  }
+
+  const now = nowIso();
+  await run(db, "UPDATE trend_runs SET browser_heartbeat_at = ?, updated_at = ? WHERE id = ?", [now, now, runId]);
+  const refreshed = await one<TrendCollectionRunRow>(db, "SELECT * FROM trend_runs WHERE id = ?", [runId]);
+
+  return {
+    ok: true as const,
+    run: await buildRunDetail(db, mapRun(refreshed!))
+  };
+}
+
+async function cancelStaleBrowserHeartbeatRuns(db: D1Database, runId?: string) {
+  const staleBefore = new Date(Date.now() - STALE_BROWSER_HEARTBEAT_MS).toISOString();
+  const staleRows = await all<Pick<TrendCollectionRunRow, "id">>(
+    db,
+    runId
+      ? `SELECT id FROM trend_runs
+         WHERE id = ?
+           AND status IN ('queued', 'running')
+           AND browser_heartbeat_at IS NOT NULL
+           AND browser_heartbeat_at < ?`
+      : `SELECT id FROM trend_runs
+         WHERE status IN ('queued', 'running')
+           AND browser_heartbeat_at IS NOT NULL
+           AND browser_heartbeat_at < ?`,
+    runId ? [runId, staleBefore] : [staleBefore]
+  );
+
+  for (const row of staleRows) {
+    await cancelTrendRun(db, row.id);
+  }
+
+  return staleRows.length;
+}
+
+async function cancelRunIfBrowserHeartbeatStale(db: D1Database, runId: string) {
+  await sleep(STALE_BROWSER_HEARTBEAT_MS + 1_000);
+  await cancelStaleBrowserHeartbeatRuns(db, runId);
 }
 
 async function deleteTrendRun(db: D1Database, runId: string) {
@@ -844,7 +980,8 @@ async function deleteTrendRun(db: D1Database, runId: string) {
 }
 
 function normalizeTrendProfileInput(input: TrendProfileInput): TrendProfileInput {
-  const normalizedTerms = normalizeExcludedTerms(input.customExcludedTerms ?? []);
+  const excludeBrandProducts = Boolean(input.excludeBrandProducts);
+  const normalizedTerms = normalizeTrendExcludedTermsForMode(excludeBrandProducts, input.customExcludedTerms ?? []);
 
   return {
     ...input,
@@ -854,7 +991,7 @@ function normalizeTrendProfileInput(input: TrendProfileInput): TrendProfileInput
     ages: [...(input.ages ?? [])].sort(),
     spreadsheetId: normalizeTrendSpreadsheetId(input.spreadsheetId ?? ""),
     resultCount: normalizeTrendResultCount(input.resultCount),
-    excludeBrandProducts: Boolean(input.excludeBrandProducts),
+    excludeBrandProducts,
     customExcludedTerms: normalizedTerms
   };
 }
@@ -976,7 +1113,7 @@ async function retryFailedTasks(db: D1Database, runId: string) {
   };
 }
 
-async function startBackfill(db: D1Database, profileId: string) {
+async function startBackfill(db: D1Database, profileId: string, options: { forceRefresh?: boolean } = {}) {
   const profileRow = await one<TrendProfileRow>(db, "SELECT * FROM trend_profiles WHERE id = ?", [profileId]);
 
   if (!profileRow) {
@@ -1023,14 +1160,16 @@ async function startBackfill(db: D1Database, profileId: string) {
     [profileId]
   );
   const pendingPeriods = new Set(pendingRows.map((row) => row.period));
-  const targetPeriods = periods.filter(
-    (period) => !snapshotCompletedMap.get(period) && !completedTaskPeriods.has(period) && !pendingPeriods.has(period)
-  );
+  const targetPeriods = options.forceRefresh
+    ? periods
+    : periods.filter(
+        (period) => !snapshotCompletedMap.get(period) && !completedTaskPeriods.has(period) && !pendingPeriods.has(period)
+      );
   const cachedPlans: Array<{ period: string; taskId: string; ranks: NaverKeywordRankItem[] }> = [];
   const uncachedPeriods: string[] = [];
 
   for (const period of targetPeriods) {
-    const cachedRanks = await readCachedMonthlyRanks(db, profile, period);
+    const cachedRanks = options.forceRefresh ? null : await readCachedMonthlyRanks(db, profile, period);
 
     if (cachedRanks) {
       cachedPlans.push({
@@ -1071,8 +1210,8 @@ async function startBackfill(db: D1Database, profileId: string) {
     db,
     `INSERT INTO trend_runs (
       id, profile_id, status, requested_by, run_type, start_period, end_period, total_tasks,
-      completed_tasks, failed_tasks, total_snapshots, sheet_url, started_at, completed_at, cancelled_at, failure_reason, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      completed_tasks, failed_tasks, total_snapshots, sheet_url, started_at, completed_at, cancelled_at, force_refresh, failure_reason, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       runRecord.id,
       runRecord.profileId,
@@ -1089,6 +1228,7 @@ async function startBackfill(db: D1Database, profileId: string) {
       runRecord.startedAt ?? null,
       runRecord.completedAt ?? null,
       runRecord.cancelledAt ?? null,
+      options.forceRefresh ? 1 : 0,
       runRecord.failureReason ?? null,
       runRecord.createdAt,
       runRecord.updatedAt
@@ -1222,6 +1362,7 @@ async function processQueuedRunBatch(
   const sessionRef: NaverSessionRef = {};
   const results: Json[] = [];
   const db = dbFor(env);
+  await cancelStaleBrowserHeartbeatRuns(db, options.runId);
   await recoverStaleRunningTasks(db, options.runId);
 
   if (await hasActiveRunningTask(db, options.runId)) {
@@ -1239,6 +1380,8 @@ async function processQueuedRunBatch(
     if (Date.now() - startedAt >= maxWallMs) {
       break;
     }
+
+    await cancelStaleBrowserHeartbeatRuns(db, options.runId);
 
     const result = await processNextQueuedRun(env, {
       runId: options.runId,
@@ -1432,7 +1575,8 @@ async function processNextQueuedRun(
   const profile = mapProfile(profileRow);
 
   try {
-    const cachedRanks = await readCachedMonthlyRanks(db, profile, nextTaskRow.period);
+    const forceRefresh = Boolean(candidateRunRow.force_refresh);
+    const cachedRanks = forceRefresh ? null : await readCachedMonthlyRanks(db, profile, nextTaskRow.period);
     const source: TrendCollectionTaskSource = cachedRanks ? "cache" : "naver";
 
     await run(db, "UPDATE trend_tasks SET source = ?, updated_at = ? WHERE id = ?", [source, nowIso(), nextTaskRow.id]);
@@ -1787,6 +1931,415 @@ async function fetchCategoryChildren(cid: number) {
     level: node.level,
     leaf: node.leaf
   }));
+}
+
+async function collectBestProductsForCategory(env: Env, input: BestProductCollectInput) {
+  const normalized = normalizeBestProductCollectInput(input);
+
+  if (!normalized) {
+    return {
+      ok: false,
+      code: "INVALID_BEST_PRODUCT_INPUT",
+      message: "분석 후보를 누적할 카테고리와 완료 run을 확인하지 못했습니다."
+    };
+  }
+
+  const analysisCandidates = await readBestProductTrendAnalysisCandidates(env.DB, normalized);
+
+  if (!analysisCandidates.length) {
+    const item = await recordBestProductFailure(env.DB, normalized, "TREND_ANALYSIS_KEYWORDS_MISSING");
+    return {
+      ok: true,
+      collectionStatus: "failed",
+      message: "해당 카테고리의 완료된 트렌드 분석 후보를 찾지 못해 누적을 중단했습니다.",
+      items: [item]
+    };
+  }
+
+  const items = await replaceBestProductRows(env.DB, normalized, analysisCandidates.slice(0, normalized.limit));
+
+  return {
+    ok: true,
+    collectionStatus: "collected",
+    message: `${normalized.categoryName} 트렌드 분석 후보 ${items.length}개를 누적하고 전체 순위를 갱신했습니다.`,
+    items
+  };
+}
+
+async function getBestProductsExport(db: D1Database) {
+  const rows = await all<BestProductItemRow>(
+    db,
+    `SELECT *
+     FROM best_product_items
+     ORDER BY CASE WHEN rank = 0 THEN 999 ELSE rank END ASC, collected_at DESC`
+  );
+  const items = rankBestProductItems(rows.map(mapBestProductItem));
+
+  return {
+    ok: true,
+    generatedAt: nowIso(),
+    items
+  };
+}
+
+function getBestProductsStatus(_env: Env) {
+  return {
+    ok: true,
+    ready: true,
+    credentialStatus: "trend-analysis-ready",
+    source: BEST_PRODUCT_SOURCE,
+    outputFileName: "Naver Trend Maker 10 베스트상품.xlsx",
+    defaultCollectLimit: BEST_PRODUCT_DEFAULT_LIMIT,
+    maxCollectLimit: BEST_PRODUCT_MAX_LIMIT,
+    requiredEnvVars: [],
+    aliasEnvVars: []
+  };
+}
+
+function normalizeBestProductCollectInput(input: BestProductCollectInput) {
+  const categoryCid = Number(input.categoryCid);
+  const categoryPath = String(input.categoryPath ?? "").trim();
+  const categoryName = String(input.categoryName ?? lastCategorySegment(categoryPath)).trim();
+  const query = String(input.query ?? categoryName).trim();
+  const runId = String(input.runId ?? "").trim();
+  const limit = Math.max(
+    1,
+    Math.min(BEST_PRODUCT_MAX_LIMIT, Number(input.limit ?? BEST_PRODUCT_DEFAULT_LIMIT) || BEST_PRODUCT_DEFAULT_LIMIT)
+  );
+  const customExcludedTerms = Array.from(
+    new Set(
+      (Array.isArray(input.customExcludedTerms) ? input.customExcludedTerms : [])
+        .map((term) => term.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+
+  if (!Number.isFinite(categoryCid) || categoryCid <= 0 || !categoryPath) {
+    return null;
+  }
+
+  return {
+    categoryCid,
+    categoryPath,
+    categoryName: categoryName || query,
+    runId,
+    query,
+    limit,
+    excludeBrandProducts: Boolean(input.excludeBrandProducts),
+    customExcludedTerms: input.excludeBrandProducts ? customExcludedTerms : []
+  };
+}
+
+async function readBestProductTrendAnalysisCandidates(
+  db: D1Database,
+  input: NonNullable<ReturnType<typeof normalizeBestProductCollectInput>>
+): Promise<TrendAnalysisCandidate[]> {
+  const profileRow = input.runId
+    ? await one<TrendProfileRow>(
+        db,
+        `SELECT p.*
+         FROM trend_profiles p
+         JOIN trend_runs r ON r.profile_id = p.id
+         WHERE r.id = ? AND p.category_cid = ?
+         LIMIT 1`,
+        [input.runId, input.categoryCid]
+      )
+    : await one<TrendProfileRow>(
+        db,
+        `SELECT *
+         FROM trend_profiles
+         WHERE category_cid = ?
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [input.categoryCid]
+      );
+
+  if (!profileRow) {
+    return [];
+  }
+
+  const profile = mapProfile(profileRow);
+  const snapshotRows = input.runId
+    ? await all<TrendSnapshotRow>(
+        db,
+        `SELECT *
+         FROM trend_snapshots
+         WHERE profile_id = ?
+           AND run_id = ?
+           AND rank <= ?
+         ORDER BY period ASC, rank ASC`,
+        [profile.id, input.runId, profile.resultCount]
+      )
+    : await all<TrendSnapshotRow>(
+        db,
+        `SELECT *
+         FROM trend_snapshots
+         WHERE profile_id = ?
+           AND run_id = (
+             SELECT run_id
+             FROM trend_snapshots
+             WHERE profile_id = ?
+             ORDER BY collected_at DESC
+             LIMIT 1
+           )
+           AND rank <= ?
+         ORDER BY period ASC, rank ASC`,
+        [profile.id, profile.id, profile.resultCount]
+      );
+  const snapshots = snapshotRows.map(mapSnapshot);
+
+  if (!snapshots.length) {
+    return [];
+  }
+
+  const analysisProfile: TrendProfile = {
+    ...profile,
+    excludeBrandProducts: input.excludeBrandProducts || profile.excludeBrandProducts,
+    customExcludedTerms: input.customExcludedTerms
+  };
+  const analysisSnapshots = snapshots.map((snapshot) => ({
+    ...snapshot,
+    brandExcluded:
+      snapshot.brandExcluded ||
+      (analysisProfile.excludeBrandProducts && applyBrandExclusion(snapshot.keyword, analysisProfile.customExcludedTerms))
+  }));
+  const analysis = buildTrendAnalysis(analysisProfile, analysisSnapshots);
+  const latestRowsByKeyword = buildLatestTrendRowsByKeyword(analysisSnapshots);
+  let nextRank = 1;
+
+  return analysis.cards.flatMap((card, cardIndex) =>
+    card.items.map((item, itemIndex) => {
+      const latestRow = latestRowsByKeyword.get(item.keyword);
+
+      return {
+        card,
+        item,
+        rank: nextRank++,
+        cardOrder: cardIndex + 1,
+        itemOrder: itemIndex + 1,
+        trendPeriod: latestRow?.period ?? latestTrendPeriod(analysisSnapshots),
+        trendRank: latestRow?.rank ?? 0
+      };
+    })
+  );
+}
+
+function buildLatestTrendRowsByKeyword(snapshots: TrendKeywordSnapshot[]) {
+  const latestRows = new Map<string, TrendKeywordSnapshot>();
+
+  snapshots.forEach((snapshot) => {
+    const current = latestRows.get(snapshot.keyword);
+    if (!current || snapshot.period.localeCompare(current.period) > 0 || (snapshot.period === current.period && snapshot.rank < current.rank)) {
+      latestRows.set(snapshot.keyword, snapshot);
+    }
+  });
+
+  return latestRows;
+}
+
+function latestTrendPeriod(snapshots: TrendKeywordSnapshot[]) {
+  return snapshots.map((snapshot) => snapshot.period).sort().at(-1) ?? "";
+}
+
+async function replaceBestProductRows(
+  db: D1Database,
+  input: NonNullable<ReturnType<typeof normalizeBestProductCollectInput>>,
+  candidates: TrendAnalysisCandidate[]
+) {
+  const collectedAt = nowIso();
+  await run(db, "DELETE FROM best_product_items WHERE category_cid = ?", [input.categoryCid]);
+
+  const statements = candidates.map((candidate) => {
+    const mapped = mapTrendAnalysisCandidateToBestProduct(input, candidate, collectedAt);
+    return db
+      .prepare(
+        `INSERT INTO best_product_items (
+          id, category_cid, category_path, category_name, query,
+          trend_period, trend_keyword, trend_rank, keyword_score, keyword_appearance_count,
+          rank, status,
+          analysis_card_kind, analysis_card, analysis_rationale,
+          analysis_latest_score, analysis_delta, analysis_momentum, analysis_seasonal_index,
+          analysis_recommended_months_json, analysis_caution_months_json,
+          title, link, image, low_price, mall_name, brand, maker, product_id,
+          source, failure_reason, collected_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.categoryCid,
+        input.categoryPath,
+        input.categoryName,
+        mapped.query,
+        mapped.trendPeriod,
+        mapped.trendKeyword,
+        mapped.trendRank,
+        mapped.keywordScore,
+        mapped.keywordAppearanceCount,
+        mapped.rank,
+        mapped.status,
+        mapped.analysisCardKind,
+        mapped.analysisCard,
+        mapped.analysisRationale,
+        mapped.latestScore,
+        mapped.delta,
+        mapped.momentum,
+        mapped.seasonalIndex,
+        json(mapped.recommendedMonths),
+        json(mapped.cautionMonths),
+        mapped.title,
+        mapped.link,
+        mapped.image,
+        mapped.lowPrice,
+        mapped.mallName,
+        mapped.brand,
+        mapped.maker,
+        mapped.productId,
+        mapped.source,
+        mapped.failureReason,
+        mapped.collectedAt,
+        collectedAt
+      );
+  });
+
+  if (statements.length) {
+    await batchInChunks(db, statements, 20);
+  }
+
+  return getBestProductItemsForCategory(db, input.categoryCid);
+}
+
+async function recordBestProductFailure(
+  db: D1Database,
+  input: NonNullable<ReturnType<typeof normalizeBestProductCollectInput>>,
+  failureReason: string
+) {
+  const collectedAt = nowIso();
+  await run(db, "DELETE FROM best_product_items WHERE category_cid = ?", [input.categoryCid]);
+  await run(
+    db,
+    `INSERT INTO best_product_items (
+      id, category_cid, category_path, category_name, query,
+      trend_period, trend_keyword, trend_rank, keyword_score, keyword_appearance_count,
+      rank, status,
+      analysis_card_kind, analysis_card, analysis_rationale,
+      analysis_latest_score, analysis_delta, analysis_momentum, analysis_seasonal_index,
+      analysis_recommended_months_json, analysis_caution_months_json,
+      title, link, image, low_price, mall_name, brand, maker, product_id,
+      source, failure_reason, collected_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, '', '', 0, 0, 0, 0, 'failed', '', '', '', 0, 0, 0, 0, '[]', '[]', '', '', '', NULL, '', '', '', '', ?, ?, ?, ?)
+    ON CONFLICT(category_cid, query, rank) DO UPDATE SET
+      category_path = excluded.category_path,
+      category_name = excluded.category_name,
+      trend_period = excluded.trend_period,
+      trend_keyword = excluded.trend_keyword,
+      trend_rank = excluded.trend_rank,
+      keyword_score = excluded.keyword_score,
+      keyword_appearance_count = excluded.keyword_appearance_count,
+      status = excluded.status,
+      analysis_card_kind = excluded.analysis_card_kind,
+      analysis_card = excluded.analysis_card,
+      analysis_rationale = excluded.analysis_rationale,
+      analysis_latest_score = excluded.analysis_latest_score,
+      analysis_delta = excluded.analysis_delta,
+      analysis_momentum = excluded.analysis_momentum,
+      analysis_seasonal_index = excluded.analysis_seasonal_index,
+      analysis_recommended_months_json = excluded.analysis_recommended_months_json,
+      analysis_caution_months_json = excluded.analysis_caution_months_json,
+      source = excluded.source,
+      failure_reason = excluded.failure_reason,
+      collected_at = excluded.collected_at,
+      updated_at = excluded.updated_at`,
+    [
+      crypto.randomUUID(),
+      input.categoryCid,
+      input.categoryPath,
+      input.categoryName,
+      "trend-analysis",
+      BEST_PRODUCT_SOURCE,
+      failureReason,
+      collectedAt,
+      collectedAt
+    ]
+  );
+
+  const [item] = await getBestProductItemsForCategory(db, input.categoryCid, true);
+  return item;
+}
+
+async function getBestProductItemsForCategory(db: D1Database, categoryCid: number, includeFailureFirst = false) {
+  const rows = await all<BestProductItemRow>(
+    db,
+    `SELECT *
+     FROM best_product_items
+     WHERE category_cid = ?
+     ORDER BY ${includeFailureFirst ? "CASE WHEN rank = 0 THEN 0 ELSE 1 END ASC," : ""}
+       keyword_score DESC,
+       CASE WHEN rank = 0 THEN 999 ELSE rank END ASC,
+       collected_at DESC`,
+    [categoryCid]
+  );
+
+  return rankBestProductItems(rows.map(mapBestProductItem));
+}
+
+function mapTrendAnalysisCandidateToBestProduct(
+  input: NonNullable<ReturnType<typeof normalizeBestProductCollectInput>>,
+  candidate: TrendAnalysisCandidate,
+  collectedAt: string
+): BestProductExportItem {
+  const { card, item } = candidate;
+  return {
+    globalRank: 0,
+    bestScore: item.confidence,
+    collectedAt,
+    status: "collected",
+    categoryPath: input.categoryPath,
+    categoryName: input.categoryName,
+    query: card.kind,
+    trendPeriod: candidate.trendPeriod,
+    trendKeyword: item.keyword,
+    trendRank: candidate.trendRank,
+    keywordScore: item.confidence,
+    keywordAppearanceCount: item.appearanceCount,
+    rank: candidate.rank,
+    analysisCardKind: card.kind,
+    analysisCard: card.title,
+    analysisRationale: item.rationale,
+    latestScore: item.latestScore,
+    delta: item.delta,
+    momentum: item.momentum,
+    seasonalIndex: item.seasonalIndex,
+    recommendedMonths: item.recommendedMonths,
+    cautionMonths: item.cautionMonths,
+    title: item.keyword,
+    link: "",
+    image: "",
+    lowPrice: null,
+    mallName: "",
+    brand: "",
+    maker: "",
+    productId: "",
+    source: BEST_PRODUCT_SOURCE,
+    failureReason: ""
+  };
+}
+
+function cleanNaverText(value: string) {
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function lastCategorySegment(categoryPath: string) {
+  return categoryPath
+    .split(">")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .at(-1) ?? "";
 }
 
 async function collectMonthlyRanks(input: {
@@ -2424,6 +2977,67 @@ function mapSnapshot(row: TrendSnapshotRow): TrendKeywordSnapshot {
   };
 }
 
+function mapBestProductItem(row: BestProductItemRow): BestProductExportItem {
+  const status = row.status === "empty" || row.status === "failed" ? row.status : "collected";
+  const keywordScore = Number(row.keyword_score ?? 0);
+  const latestScore = Number(row.analysis_latest_score ?? 0);
+  const delta = Number(row.analysis_delta ?? 0);
+
+  return {
+    globalRank: 0,
+    bestScore: keywordScore,
+    collectedAt: row.collected_at,
+    status,
+    categoryPath: row.category_path,
+    categoryName: row.category_name,
+    query: row.query,
+    trendPeriod: row.trend_period ?? "",
+    trendKeyword: row.trend_keyword ?? row.query,
+    trendRank: Number(row.trend_rank ?? 0),
+    keywordScore,
+    keywordAppearanceCount: Number(row.keyword_appearance_count ?? 0),
+    rank: Number(row.rank),
+    analysisCardKind: row.analysis_card_kind ?? "",
+    analysisCard: row.analysis_card ?? "",
+    analysisRationale: row.analysis_rationale ?? "",
+    latestScore,
+    delta,
+    momentum: Number(row.analysis_momentum ?? 0),
+    seasonalIndex: Number(row.analysis_seasonal_index ?? 0),
+    recommendedMonths: parseJson<string[]>(row.analysis_recommended_months_json ?? null, []),
+    cautionMonths: parseJson<string[]>(row.analysis_caution_months_json ?? null, []),
+    title: row.title,
+    link: row.link,
+    image: row.image,
+    lowPrice: row.low_price === null || row.low_price === undefined ? null : Number(row.low_price),
+    mallName: row.mall_name,
+    brand: row.brand,
+    maker: row.maker,
+    productId: row.product_id,
+    source: row.source,
+    failureReason: row.failure_reason ?? ""
+  };
+}
+
+function rankBestProductItems(items: BestProductExportItem[]) {
+  const sorted = items
+    .slice()
+    .sort(
+      (left, right) =>
+        Number(right.status === "collected") - Number(left.status === "collected") ||
+        right.bestScore - left.bestScore ||
+        left.rank - right.rank ||
+        left.categoryPath.localeCompare(right.categoryPath) ||
+        left.title.localeCompare(right.title)
+    );
+
+  let nextRank = 1;
+  return sorted.map((item) => ({
+    ...item,
+    globalRank: item.status === "collected" ? nextRank++ : 0
+  }));
+}
+
 function parseJson<T>(value: string | null, fallback: T): T {
   try {
     return value ? (JSON.parse(value) as T) : fallback;
@@ -2503,6 +3117,14 @@ async function applySchemaChanges(db: D1Database) {
     await run(db, "ALTER TABLE trend_runs ADD COLUMN cancelled_at TEXT");
   }
 
+  if (!runColumns.has("browser_heartbeat_at")) {
+    await run(db, "ALTER TABLE trend_runs ADD COLUMN browser_heartbeat_at TEXT");
+  }
+
+  if (!runColumns.has("force_refresh")) {
+    await run(db, "ALTER TABLE trend_runs ADD COLUMN force_refresh INTEGER NOT NULL DEFAULT 0");
+  }
+
   if (!runColumns.has("confidence_score")) {
     await run(db, "ALTER TABLE trend_runs ADD COLUMN confidence_score REAL");
   }
@@ -2524,6 +3146,106 @@ async function applySchemaChanges(db: D1Database) {
   if (!taskColumns.has("source")) {
     await run(db, "ALTER TABLE trend_tasks ADD COLUMN source TEXT");
   }
+
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS best_product_items (
+      id TEXT PRIMARY KEY,
+      category_cid INTEGER NOT NULL,
+      category_path TEXT NOT NULL,
+      category_name TEXT NOT NULL,
+      query TEXT NOT NULL,
+      trend_period TEXT NOT NULL DEFAULT '',
+      trend_keyword TEXT NOT NULL DEFAULT '',
+      trend_rank INTEGER NOT NULL DEFAULT 0,
+      keyword_score REAL NOT NULL DEFAULT 0,
+      keyword_appearance_count INTEGER NOT NULL DEFAULT 0,
+      rank INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      analysis_card_kind TEXT NOT NULL DEFAULT '',
+      analysis_card TEXT NOT NULL DEFAULT '',
+      analysis_rationale TEXT NOT NULL DEFAULT '',
+      analysis_latest_score REAL NOT NULL DEFAULT 0,
+      analysis_delta REAL NOT NULL DEFAULT 0,
+      analysis_momentum REAL NOT NULL DEFAULT 0,
+      analysis_seasonal_index REAL NOT NULL DEFAULT 0,
+      analysis_recommended_months_json TEXT NOT NULL DEFAULT '[]',
+      analysis_caution_months_json TEXT NOT NULL DEFAULT '[]',
+      title TEXT NOT NULL DEFAULT '',
+      link TEXT NOT NULL DEFAULT '',
+      image TEXT NOT NULL DEFAULT '',
+      low_price INTEGER,
+      mall_name TEXT NOT NULL DEFAULT '',
+      brand TEXT NOT NULL DEFAULT '',
+      maker TEXT NOT NULL DEFAULT '',
+      product_id TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL,
+      failure_reason TEXT,
+      collected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(category_cid, query, rank)
+    )`
+  );
+  const bestProductColumns = new Set((await all<{ name: string }>(db, "PRAGMA table_info(best_product_items)")).map((column) => column.name));
+
+  if (!bestProductColumns.has("trend_period")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN trend_period TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!bestProductColumns.has("trend_keyword")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN trend_keyword TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!bestProductColumns.has("trend_rank")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN trend_rank INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("keyword_score")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN keyword_score REAL NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("keyword_appearance_count")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN keyword_appearance_count INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("analysis_card_kind")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_card_kind TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!bestProductColumns.has("analysis_card")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_card TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!bestProductColumns.has("analysis_rationale")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_rationale TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!bestProductColumns.has("analysis_latest_score")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_latest_score REAL NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("analysis_delta")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_delta REAL NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("analysis_momentum")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_momentum REAL NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("analysis_seasonal_index")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_seasonal_index REAL NOT NULL DEFAULT 0");
+  }
+
+  if (!bestProductColumns.has("analysis_recommended_months_json")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_recommended_months_json TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  if (!bestProductColumns.has("analysis_caution_months_json")) {
+    await run(db, "ALTER TABLE best_product_items ADD COLUMN analysis_caution_months_json TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  await run(db, "CREATE INDEX IF NOT EXISTS idx_best_product_items_category ON best_product_items(category_cid, query)");
+  await run(db, "CREATE INDEX IF NOT EXISTS idx_best_product_items_collected_at ON best_product_items(collected_at)");
 }
 
 interface TrendProfileRow {
@@ -2568,6 +3290,8 @@ interface TrendCollectionRunRow {
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
+  browser_heartbeat_at?: string | null;
+  force_refresh?: number | null;
   confidence_score?: number | null;
   analysis_summary_json?: string | null;
   analysis_cards_json?: string | null;
@@ -2610,4 +3334,50 @@ interface TrendSnapshotRow {
   ages_json: string;
   collected_at: string;
   brand_excluded?: number;
+}
+
+interface BestProductItemRow {
+  id: string;
+  category_cid: number;
+  category_path: string;
+  category_name: string;
+  query: string;
+  trend_period?: string | null;
+  trend_keyword?: string | null;
+  trend_rank?: number | null;
+  keyword_score?: number | null;
+  keyword_appearance_count?: number | null;
+  rank: number;
+  status: string;
+  analysis_card_kind?: string | null;
+  analysis_card?: string | null;
+  analysis_rationale?: string | null;
+  analysis_latest_score?: number | null;
+  analysis_delta?: number | null;
+  analysis_momentum?: number | null;
+  analysis_seasonal_index?: number | null;
+  analysis_recommended_months_json?: string | null;
+  analysis_caution_months_json?: string | null;
+  title: string;
+  link: string;
+  image: string;
+  low_price: number | null;
+  mall_name: string;
+  brand: string;
+  maker: string;
+  product_id: string;
+  source: string;
+  failure_reason: string | null;
+  collected_at: string;
+  updated_at: string;
+}
+
+interface TrendAnalysisCandidate {
+  card: TrendAnalysisCard;
+  item: TrendAnalysisKeyword;
+  rank: number;
+  cardOrder: number;
+  itemOrder: number;
+  trendPeriod: string;
+  trendRank: number;
 }

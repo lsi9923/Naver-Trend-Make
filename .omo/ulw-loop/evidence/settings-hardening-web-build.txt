@@ -1,0 +1,31 @@
+
+> @runacademy/web@0.1.0 build C:\Users\imda0\Desktop\커서 ai 폴더\naver-trend-maker-10\web
+> next build
+
+  ▲ Next.js 14.2.5
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/6) ...
+   Generating static pages (1/6) 
+   Generating static pages (2/6) 
+   Generating static pages (4/6) 
+ ✓ Generating static pages (6/6)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                              Size     First Load JS
+┌ ○ /                                    142 B          87.4 kB
+├ ○ /_not-found                          872 B          88.1 kB
+├ ○ /icon.svg                            0 B                0 B
+└ ○ /sourcing/admin                      62.3 kB         150 kB
++ First Load JS shared by all            87.2 kB
+  ├ chunks/200-5a829d0d4b045e16.js       31.6 kB
+  ├ chunks/9409b4b9-65db0d220a46de34.js  53.6 kB
+  └ other shared chunks (total)          1.96 kB
+
+
+○  (Static)  prerendered as static content
+

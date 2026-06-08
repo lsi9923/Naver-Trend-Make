@@ -1,0 +1,113 @@
+{
+  "runId": "d7b0894d-da1a-41c2-90ce-0f488f40915a",
+  "status": "running",
+  "completedTasks": 19,
+  "totalTasks": 65,
+  "failedTasks": 0,
+  "cacheCompletedTasks": 0,
+  "naverCompletedTasks": 19,
+  "processingMode": "naver",
+  "currentPeriod": "2022-08",
+  "firstTasks": [
+    {
+      "period": "2021-01",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-02",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-03",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-04",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-05",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-06",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-07",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-08",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-09",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-10",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-11",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2021-12",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-01",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-02",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-03",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-04",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-05",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-06",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-07",
+      "status": "completed",
+      "source": "naver"
+    },
+    {
+      "period": "2022-08",
+      "status": "pending",
+      "source": null
+    }
+  ]
+}

@@ -1,0 +1,222 @@
+{
+  "selects": [
+    {
+      "disabled": false,
+      "optionCount": 13,
+      "options": [
+        {
+          "disabled": false,
+          "text": "선택",
+          "value": ""
+        },
+        {
+          "disabled": false,
+          "text": "패션의류",
+          "value": "50000000"
+        },
+        {
+          "disabled": false,
+          "text": "패션잡화",
+          "value": "50000001"
+        },
+        {
+          "disabled": false,
+          "text": "화장품/미용",
+          "value": "50000002"
+        },
+        {
+          "disabled": false,
+          "text": "디지털/가전",
+          "value": "50000003"
+        },
+        {
+          "disabled": false,
+          "text": "가구/인테리어",
+          "value": "50000004"
+        },
+        {
+          "disabled": false,
+          "text": "출산/육아",
+          "value": "50000005"
+        },
+        {
+          "disabled": false,
+          "text": "식품",
+          "value": "50000006"
+        },
+        {
+          "disabled": false,
+          "text": "스포츠/레저",
+          "value": "50000007"
+        },
+        {
+          "disabled": false,
+          "text": "생활/건강",
+          "value": "50000008"
+        },
+        {
+          "disabled": false,
+          "text": "여가/생활편의",
+          "value": "50000009"
+        },
+        {
+          "disabled": false,
+          "text": "면세점",
+          "value": "50000010"
+        },
+        {
+          "disabled": false,
+          "text": "도서",
+          "value": "50005542"
+        }
+      ],
+      "selectedText": "패션의류",
+      "value": "50000000"
+    },
+    {
+      "disabled": false,
+      "optionCount": 5,
+      "options": [
+        {
+          "disabled": false,
+          "text": "선택",
+          "value": ""
+        },
+        {
+          "disabled": false,
+          "text": "여성의류",
+          "value": "50000167"
+        },
+        {
+          "disabled": false,
+          "text": "여성언더웨어/잠옷",
+          "value": "50000168"
+        },
+        {
+          "disabled": false,
+          "text": "남성의류",
+          "value": "50000169"
+        },
+        {
+          "disabled": false,
+          "text": "남성언더웨어/잠옷",
+          "value": "50000170"
+        }
+      ],
+      "selectedText": "여성의류",
+      "value": "50000167"
+    },
+    {
+      "disabled": false,
+      "optionCount": 18,
+      "options": [
+        {
+          "disabled": false,
+          "text": "선택",
+          "value": ""
+        },
+        {
+          "disabled": false,
+          "text": "니트",
+          "value": "50021279"
+        },
+        {
+          "disabled": false,
+          "text": "원피스",
+          "value": "50000807"
+        },
+        {
+          "disabled": false,
+          "text": "티셔츠",
+          "value": "50000803"
+        },
+        {
+          "disabled": false,
+          "text": "블라우스/셔츠",
+          "value": "50000804"
+        },
+        {
+          "disabled": false,
+          "text": "아우터",
+          "value": "50021359"
+        },
+        {
+          "disabled": false,
+          "text": "점퍼",
+          "value": "50000814"
+        },
+        {
+          "disabled": false,
+          "text": "바지",
+          "value": "50000810"
+        },
+        {
+          "disabled": false,
+          "text": "청바지",
+          "value": "50000809"
+        },
+        {
+          "disabled": false,
+          "text": "스커트",
+          "value": "50000808"
+        },
+        {
+          "disabled": false,
+          "text": "레깅스",
+          "value": "50000812"
+        },
+        {
+          "disabled": false,
+          "text": "트레이닝복",
+          "value": "50000818"
+        },
+        {
+          "disabled": false,
+          "text": "정장세트",
+          "value": "50000816"
+        },
+        {
+          "disabled": false,
+          "text": "한복",
+          "value": "50000819"
+        },
+        {
+          "disabled": false,
+          "text": "유니폼/단체복",
+          "value": "50000821"
+        },
+        {
+          "disabled": false,
+          "text": "파티복",
+          "value": "50000820"
+        },
+        {
+          "disabled": false,
+          "text": "점프슈트",
+          "value": "50000811"
+        },
+        {
+          "disabled": false,
+          "text": "코디세트",
+          "value": "50000778"
+        }
+      ],
+      "selectedText": "선택",
+      "value": ""
+    }
+  ],
+  "startButtons": [
+    {
+      "disabled": false,
+      "text": "API 설정"
+    },
+    {
+      "disabled": false,
+      "text": "API 주소 저장"
+    },
+    {
+      "disabled": true,
+      "text": "API 설정 필요"
+    }
+  ]
+}
